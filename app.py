@@ -318,6 +318,12 @@ def main():
         if 'chart' in data and not data['chart'].empty and 'dialog_role' in data['chart'].columns:
             roles = ['Все'] + sorted(data['chart']['dialog_role'].dropna().unique().tolist())
             selected_role = st.selectbox("👤 Роль", roles)
+
+        # === 🆕 Фильтр по продукту ===
+        selected_product = 'Все'
+        if 'chart' in data and not data['chart'].empty and 'product_slug' in data['chart'].columns:
+            products = ['Все'] + sorted(data['chart']['product_slug'].dropna().unique().tolist())
+            selected_product = st.selectbox("📦 Продукт", products)
         
         # === Фильтр по периоду ===
         date_range = None
@@ -355,6 +361,10 @@ def main():
     # 🆕 Фильтр по роли
     if selected_role != 'Все' and 'dialog_role' in df.columns:
         filter_mask &= df['dialog_role'] == selected_role
+    
+    # 🆕 Фильтр по продукту
+    if selected_product != 'Все' and 'product_slug' in df.columns:
+        filter_mask &= df['product_slug'] == selected_product
 
     # Фильтр по периоду
     if date_range and 'activity_dt' in df.columns:
@@ -379,6 +389,8 @@ def main():
             filters_applied.append(f"роль: {selected_role}")
         if date_range:
             filters_applied.append(f"период: {date_range[0]} - {date_range[1]}")
+        if selected_product != 'Все':
+            filters_applied.append(f"продукт: {selected_product}")
         
         st.info(f"🔍 Показано {len(df):,} из {len(data['chart']):,} диалогов (фильтры: {', '.join(filters_applied)})")
     
@@ -388,57 +400,130 @@ def main():
         "📚 Классы/Предметы", "⏱️ Время", "🔄 Сравнение"
     ])
     
-    # === ВКЛАДКА 1: ВОРОНКИ (ДИНАМИЧЕСКИЕ) ===
+    # === ВКЛАДКА 1: ВОРОНКИ (ПОСЛЕДОВАТЕЛЬНЫЕ) ===
     with tab1:
         st.subheader("🔄 Воронка мэтчинга")
         
-        # Проверяем, есть ли у нас данные после фильтров
         if len(df) == 0:
             st.warning("⚠️ Нет данных для отображения воронки с текущими фильтрами.")
-        elif 'status_only' in df.columns:
-            #  ГЛАВНАЯ ВОРОНКА
-            # Считаем количество каждого тега в отфильтрованных данных
-            funnel_counts = df['status_only'].value_counts()
+        elif 'status_only' not in df.columns:
+            st.error("❌ В данных не найден столбец 'status_only'.")
+        else:
+            total_count = len(df)
             
-            # Маппинг тегов на понятные названия
-            tag_mapping = {
-                '(-) всё хорошо': '✅ Успешный мэтчинг',
-                '(-) ничего не ввели': '❌ Пустой запрос',
-                '(-) ввели задачу': '❓ Задача вместо темы',
-                '(-) ввели тему не по математике': '🌍 Не математика',
-                '(-) ввели мат тему не 5-11': '🔢 Не 5-11 класс',
-                '(-) ушли после мэтчинга': '🚶 Ушли после подбора',
-                '(-) мэтчинг не сработал': '⚠️ Ошибка подбора'
-            }
+            # Последовательная воронка (от общего к частному)
+            # Порядок: всего → без пустых → без задач → без других предметов → без других классов → без ушедших → успешные
             
-            # Формируем данные для графика
-            funnel_data = []
-            for tag, label in tag_mapping.items():
-                if tag in funnel_counts.index:
-                    funnel_data.append({'Этап': label, 'Количество': int(funnel_counts[tag])})
+            funnel_stages = [
+                {
+                    'Этап': '📥 Всего диалогов',
+                    'count': total_count,
+                    'drop': 0
+                }
+            ]
             
-            # Строим график (plotly сам отсортирует от большего к меньшему)
-            if funnel_data:
-                filter_info = f" (после фильтров: {len(df):,} диалогов)" if len(df) < len(data['chart']) else ""
-                
-                fig_funnel = px.funnel(
-                    pd.DataFrame(funnel_data), 
-                    x='Количество', 
-                    y='Этап',
-                    title=f"Воронка мэтчинга — {selected_month}{filter_info}",
-                    color='Этап',
-                    color_discrete_sequence=px.colors.qualitative.Set2
-                )
-                fig_funnel.update_layout(height=500, showlegend=False)
-                st.plotly_chart(fig_funnel, use_container_width=True)
+            # 1. Минус пустые запросы
+            empty_requests = len(df[df['status_only'] == '(-) ничего не ввели'])
+            after_empty = total_count - empty_requests
+            funnel_stages.append({
+                'Этап': '✅ Без пустых запросов',
+                'count': after_empty,
+                'drop': -empty_requests
+            })
             
-            # 🔵 ВОРОНКА ПОСТ-МЭТЧИНГА (из столбца status_only_post)
+            # 2. Минус задачи вместо темы
+            task_requests = len(df[df['status_only'] == '(-) ввели задачу'])
+            after_task = after_empty - task_requests
+            funnel_stages.append({
+                'Этап': '✅ Без задач вместо темы',
+                'count': after_task,
+                'drop': -task_requests
+            })
+            
+            # 3. Минус не математика
+            not_math = len(df[df['status_only'] == '(-) ввели тему не по математике'])
+            after_math = after_task - not_math
+            funnel_stages.append({
+                'Этап': '✅ По математике',
+                'count': after_math,
+                'drop': -not_math
+            })
+            
+            # 4. Минус не 5-11 класс
+            not_grade = len(df[df['status_only'] == '(-) ввели мат тему не 5-11'])
+            after_grade = after_math - not_grade
+            funnel_stages.append({
+                'Этап': '✅ 5-11 класс',
+                'count': after_grade,
+                'drop': -not_grade
+            })
+            
+            # 5. Минус ушли после мэтчинга
+            left_after = len(df[df['status_only'] == '(-) ушли после мэтчинга'])
+            after_left = after_grade - left_after
+            funnel_stages.append({
+                'Этап': '✅ Не ушли сразу',
+                'count': after_left,
+                'drop': -left_after
+            })
+            
+            # 6. Успешный мэтчинг (всё хорошо)
+            success = len(df[df['status_only'] == '(-) всё хорошо'])
+            matching_error = after_left - success  # разница — ошибка мэтчинга
+            
+            funnel_stages.append({
+                'Этап': '🎉 Успешный мэтчинг',
+                'count': success,
+                'drop': -matching_error if matching_error > 0 else 0
+            })
+            
+            # Создаём DataFrame для графика
+            funnel_df = pd.DataFrame(funnel_stages)
+            
+            # Добавляем текст с цифрами
+            funnel_df['Текст'] = funnel_df.apply(
+                lambda row: f"{row['count']:,} {row['drop']:+,}" if row['drop'] != 0 else f"{row['count']:,}",
+                axis=1
+            )
+            
+            filter_info = f" (после фильтров: {total_count:,} диалогов)" if total_count < len(data['chart']) else ""
+            
+            # Строим воронку
+            fig_funnel = px.funnel(
+                funnel_df,
+                x='count',
+                y='Этап',
+                title=f"Воронка мэтчинга — {selected_month}{filter_info}",
+                color='Этап',
+                color_discrete_sequence=px.colors.qualitative.Set2
+            )
+            
+            # Добавляем аннотации с цифрами отвалов
+            for i, row in funnel_df.iterrows():
+                if row['drop'] != 0:
+                    fig_funnel.add_annotation(
+                        x=row['count'],
+                        y=row['Этап'],
+                        text=f"({row['drop']:+,})",
+                        showarrow=False,
+                        font=dict(size=10, color='red'),
+                        xshift=50,
+                        yshift=0
+                    )
+            
+            fig_funnel.update_layout(
+                height=600,
+                showlegend=False,
+                yaxis=dict(autorange='reversed')  # Переворачиваем: сверху вниз
+            )
+            
+            st.plotly_chart(fig_funnel, use_container_width=True)
+            
+            # 🔵 ВОРОНКА ПОСТ-МЭТЧИНГА (без изменений)
             st.divider()
             st.subheader("🎯 Пост-мэтчинг: углубление в диалог")
             
             if 'status_only_post' in df.columns:
-                # Берем только успешные диалоги (где status_only == '(-) всё хорошо'), 
-                # чтобы показать, что было дальше
                 successful_df = df[df['status_only'] == '(-) всё хорошо']
                 
                 if len(successful_df) > 0:
@@ -472,9 +557,6 @@ def main():
                     st.info("ℹ️ Нет успешных диалогов для анализа пост-мэтчинга.")
             else:
                 st.warning("⚠️ Столбец 'status_only_post' не найден в данных.")
-
-        else:
-            st.error("❌ В данных не найден столбец 'status_only'. Проверь структуру CSV файла.")
     
     # === ВКЛАДКА 2: ДИНАМИКА ПО ДАТАМ ===
     with tab2:
