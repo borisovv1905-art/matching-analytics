@@ -324,6 +324,10 @@ def main():
         if 'chart' in data and not data['chart'].empty and 'product_slug' in data['chart'].columns:
             products = ['Все'] + sorted(data['chart']['product_slug'].dropna().unique().tolist())
             selected_product = st.selectbox("📦 Продукт", products)
+
+        # 🔍 Отладка: показать доступные продукты
+        if st.checkbox("🔍 Показать продукты", value=False):
+            st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
         
         # === Фильтр по периоду ===
         date_range = None
@@ -349,6 +353,19 @@ def main():
     if 'chart' not in data or data['chart'].empty:
         st.warning("⚠️ Не удалось загрузить данные.")
         return
+    
+    # 🔍 ОТЛАДКА: показываем диапазон дат
+    if 'activity_dt' in data['chart'].columns:
+        
+        min_date = data['chart']['activity_dt'].min()
+        max_date = data['chart']['activity_dt'].max()
+        
+        if pd.notna(min_date) and pd.notna(max_date):
+            st.sidebar.info(
+                f"📅 **Диапазон дат в файле:**\n"
+                f"{min_date.date()} — {max_date.date()}\n\n"
+                f"Выбран месяц: **{selected_month}**"
+            )
 
     # === ПРИМЕНЯЕМ ФИЛЬТРЫ КО ВСЕМ ДАННЫМ ===
     df = data['chart'].copy()
@@ -410,9 +427,6 @@ def main():
             st.error("❌ В данных не найден столбец 'status_only'.")
         else:
             total_count = len(df)
-            
-            # Последовательная воронка (от общего к частному)
-            # Порядок: всего → без пустых → без задач → без других предметов → без других классов → без ушедших → успешные
             
             funnel_stages = [
                 {
@@ -519,7 +533,7 @@ def main():
             
             st.plotly_chart(fig_funnel, use_container_width=True)
             
-            # 🔵 ВОРОНКА ПОСТ-МЭТЧИНГА (без изменений)
+            # 🔵 ВОРОНКА ПОСТ-МЭТЧИНГА (последовательная)
             st.divider()
             st.subheader("🎯 Пост-мэтчинг: углубление в диалог")
             
@@ -527,32 +541,101 @@ def main():
                 successful_df = df[df['status_only'] == '(-) всё хорошо']
                 
                 if len(successful_df) > 0:
-                    post_counts = successful_df['status_only_post'].value_counts()
+                    total_success = len(successful_df)
                     
-                    post_tags = {
-                        '(-) решили финальную задачу': '🏆 Решили финал',
-                        '(-) увидели финальную задачу': '🎯 Увидели финал',
-                        '(-) ушли после первого шага': '🚶 Шаг 1',
-                        '(-) ушли после 2-го и более шага': '🚶 2+ шага',
-                        '(-) ушли после плана': '📋 Увидели план'
-                    }
+                    # Последовательная воронка для пост-мэтчинга
+                    post_funnel = [
+                        {
+                            'Этап': '🎉 Успешный мэтчинг',
+                            'count': total_success,
+                            'drop': 0
+                        }
+                    ]
                     
-                    post_data = []
-                    for tag, label in post_tags.items():
-                        if tag in post_counts.index:
-                            post_data.append({'Этап': label, 'Количество': int(post_counts[tag])})
+                    # 1. Увидели план
+                    saw_plan = len(successful_df[successful_df['status_only_post'] == '(-) ушли после плана'])
+                    after_plan = total_success - saw_plan
+                    post_funnel.append({
+                        'Этап': '📋 Увидели план',
+                        'count': after_plan,
+                        'drop': -saw_plan
+                    })
                     
-                    if post_data:
-                        fig_post = px.funnel(
-                            pd.DataFrame(post_data),
-                            x='Количество',
-                            y='Этап',
-                            title="Воронка пост-мэтчинга (только успешные)",
-                            color='Этап',
-                            color_discrete_sequence=px.colors.sequential.Blues
-                        )
-                        fig_post.update_layout(height=400, showlegend=False)
-                        st.plotly_chart(fig_post, use_container_width=True)
+                    # 2. Ушли после первого шага
+                    left_step1 = len(successful_df[successful_df['status_only_post'] == '(-) ушли после первого шага'])
+                    after_step1 = after_plan - left_step1
+                    post_funnel.append({
+                        'Этап': '🚶 Прошли шаг 1',
+                        'count': after_step1,
+                        'drop': -left_step1
+                    })
+                    
+                    # 3. Ушли после 2+ шагов
+                    left_step2 = len(successful_df[successful_df['status_only_post'] == '(-) ушли после 2-го и более шага'])
+                    after_step2 = after_step1 - left_step2
+                    post_funnel.append({
+                        'Этап': '🚶🚶 Прошли 2+ шага',
+                        'count': after_step2,
+                        'drop': -left_step2
+                    })
+                    
+                    # 4. Увидели финал
+                    saw_final = len(successful_df[successful_df['status_only_post'] == '(-) увидели финальную задачу'])
+                    after_final = after_step2 - saw_final
+                    post_funnel.append({
+                        'Этап': '🎯 Увидели финал',
+                        'count': after_final,
+                        'drop': -saw_final
+                    })
+                    
+                    # 5. Решили финал
+                    solved_final = len(successful_df[successful_df['status_only_post'] == '(-) решили финальную задачу'])
+                    post_funnel.append({
+                        'Этап': '🏆 Решили финал',
+                        'count': solved_final,
+                        'drop': -(after_final - solved_final) if after_final > solved_final else 0
+                    })
+                    
+                    # Создаём DataFrame
+                    post_df = pd.DataFrame(post_funnel)
+                    post_df['Текст'] = post_df.apply(
+                        lambda row: f"{row['count']:,} {row['drop']:+,}" if row['drop'] != 0 else f"{row['count']:,}",
+                        axis=1
+                    )
+                    
+                    # Строим воронку
+                    fig_post = px.funnel(
+                        post_df,
+                        x='count',
+                        y='Этап',
+                        title="Воронка пост-мэтчинга (последовательная)",
+                        color='Этап',
+                        color_discrete_sequence=px.colors.sequential.Blues
+                    )
+                    
+                    # Добавляем аннотации
+                    for i, row in post_df.iterrows():
+                        if row['drop'] != 0:
+                            fig_post.add_annotation(
+                                x=row['count'],
+                                y=row['Этап'],
+                                text=f"({row['drop']:+,})",
+                                showarrow=False,
+                                font=dict(size=10, color='red'),
+                                xshift=50
+                            )
+                    
+                    fig_post.update_layout(
+                        height=500,
+                        showlegend=False,
+                        yaxis=dict(autorange='reversed')
+                    )
+                    
+                    st.plotly_chart(fig_post, use_container_width=True)
+                    
+                    # Показываем детали
+                    st.write(f"**Всего успешных:** {total_success:,}")
+                    st.write(f"**Решили финал:** {solved_final:,} ({solved_final/total_success*100:.1f}%)")
                 else:
                     st.info("ℹ️ Нет успешных диалогов для анализа пост-мэтчинга.")
             else:
@@ -596,9 +679,50 @@ def main():
         if 'skeleton' in data and not data['skeleton'].empty:
             skel_df = data['skeleton']
             
-            # Поиск диалога
-            search_id = st.text_input("🔍 ID диалога (или часть)", placeholder="003a9e82...")
+            # 🔍 Проверка: есть ли выбранный диалог из вкладки "Время"
+            search_id = ""
+            if 'selected_dialog_id' in st.session_state:
+                search_id = st.session_state['selected_dialog_id']
+                del st.session_state['selected_dialog_id']  # Очищаем после использования
+                st.info(f"🎯 Открыт диалог из вкладки «Время»: {search_id[:36]}...")
             
+            # Поиск диалога по ID (ручной ввод)
+            if not search_id:
+                search_id = st.text_input("🔍 ID диалога (или часть)", placeholder="003a9e82...")
+            
+            # 🆕 Быстрый выбор из списка диалогов
+            st.divider()
+            st.subheader("📋 Быстрый выбор диалога")
+            
+            if len(skel_df) > 0 and 'dialog_id' in skel_df.columns:
+                # Создаём список для выбора с информацией
+                dialog_options = {}
+                for idx, row in skel_df.head(100).iterrows():  # Первые 100 диалогов
+                    dialog_id = row['dialog_id']
+                    dialog_info = f"{dialog_id[:36]}..."
+                    
+                    # Добавляем доп. информацию, если есть
+                    if 'Тег' in row and pd.notna(row['Тег']):
+                        dialog_info += f" | {row['Тег']}"
+                    if 'dialog_grade' in row and pd.notna(row['dialog_grade']):
+                        dialog_info += f" | {row['dialog_grade']} кл."
+                    if 'dialog_role' in row and pd.notna(row['dialog_role']):
+                        dialog_info += f" | {row['dialog_role']}"
+                    
+                    dialog_options[dialog_info] = dialog_id
+                
+                selected_dialog_label = st.selectbox(
+                    "Выбери диалог из списка",
+                    options=list(dialog_options.keys()),
+                    index=None,
+                    placeholder="Нажми для выбора..."
+                )
+                
+                if selected_dialog_label:
+                    search_id = dialog_options[selected_dialog_label]
+                    st.info(f"✅ Выбран диалог: {search_id[:36]}...")
+            
+            # 🔍 Поиск и визуализация
             if search_id and 'dialog_id' in skel_df.columns:
                 result = skel_df[skel_df['dialog_id'].astype(str).str.contains(search_id, case=False)]
                 if not result.empty:
@@ -664,8 +788,7 @@ def main():
                 st.info("ℹ️ Столбец dialog_id не найден")
         else:
             st.info("ℹ️ Данные по скелетам не загружены")
-    
-    # === ВКЛАДКА 4: КЛАССЫ / ПРЕДМЕТЫ ===
+
     with tab4:
         st.subheader("📚 Распределение по классам и предметам")
         if 'class_stats' in data and not data['class_stats'].empty:
@@ -697,13 +820,43 @@ def main():
             if 'Сообщений тьютора' in df.columns:
                 with col4: st.metric("🤖 Ср. сообщений (бот)", f"{df['Сообщений тьютора'].mean():.1f}")
             
-            if 'Время сессии в секундах' in df.columns:
-                st.divider()
-                df_clean = df[df['Время сессии в секундах'] > 0].copy()
-                df_clean['Время (мин)'] = df_clean['Время сессии в секундах'] / 60
-                fig_hist = px.histogram(df_clean, x='Время (мин)', nbins=30, title="Гистограмма длительности сессий", marginal='box')
-                fig_hist.update_layout(height=400)
-                st.plotly_chart(fig_hist, use_container_width=True)
+            # 🆕 Топ самых длинных сессий
+            st.divider()
+            st.subheader("🏆 Топ самых длинных сессий")
+            
+            if 'Время сессии в секундах' in df.columns and 'dialog_id' in df.columns:
+                top_sessions = df.nlargest(20, 'Время сессии в секундах')[
+                    ['dialog_id', 'Время сессии в секундах', 'dialog_grade', 'dialog_role', 'product_slug']
+                ].copy()
+                
+                top_sessions['Время (мин)'] = (top_sessions['Время сессии в секундах'] / 60).round(1)
+                
+                st.write(f"💡 **Кликни по ID диалога, чтобы открыть его скелет**")
+                
+                # Показываем таблицу с ссылками
+                for idx, row in top_sessions.iterrows():
+                    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+                    with col1:
+                        st.text(f"🔗 {row['dialog_id'][:36]}...")
+                    with col2:
+                        st.metric("", f"{row['Время (мин)']} мин")
+                    with col3:
+                        st.text(f"Класс {row['dialog_grade']}")
+                    with col4:
+                        st.text(row['dialog_role'][:10])
+                    with col5:
+                        st.text(row['product_slug'][:10] if pd.notna(row['product_slug']) else "")
+                
+                # Кнопка для копирования ID
+                selected_dialog = st.selectbox(
+                    " Выбери диалог для просмотра скелета",
+                    options=top_sessions['dialog_id'].tolist(),
+                    format_func=lambda x: f"{x[:36]}... ({top_sessions[top_sessions['dialog_id']==x]['Время (мин)'].iloc[0] if len(top_sessions[top_sessions['dialog_id']==x]) > 0 else '?'} мин)"
+                )
+                
+                if selected_dialog:
+                    st.session_state['selected_dialog_id'] = selected_dialog
+                    st.success(f"✅ ID {selected_dialog[:36]}... скопирован! Перейди на вкладку **🦴 Скелеты**")
         else:
             st.info("ℹ️ Столбцы с метриками времени не найдены")
     
@@ -719,6 +872,18 @@ def main():
                 df_combined = load_multiple_months(selected_months)
             
             if not df_combined.empty:
+                # 🆕 Применяем фильтры к объединённым данным
+                if selected_grade != 'Все' and 'dialog_grade' in df_combined.columns:
+                    df_combined = df_combined[df_combined['dialog_grade'].astype(str) == selected_grade]
+                
+                if selected_role != 'Все' and 'dialog_role' in df_combined.columns:
+                    df_combined = df_combined[df_combined['dialog_role'] == selected_role]
+                
+                if selected_product != 'Все' and 'product_slug' in df_combined.columns:
+                    df_combined = df_combined[df_combined['product_slug'] == selected_product]
+                
+                st.info(f"🔍 В сравнении участвует {len(df_combined):,} диалогов (после фильтров)")
+                
                 # 1. Сравнение воронок
                 st.write("### 📊 Конверсия по месяцам")
                 
