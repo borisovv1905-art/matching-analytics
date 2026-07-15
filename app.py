@@ -14,112 +14,103 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# === КОНФИГУРАЦИЯ: ССЫЛКИ НА ТАБЛИЦЫ ===
+# === КОНФИГУРАЦИЯ: ФАЙЛЫ НА GITHUB ===
+# Базовая ссылка на raw-файлы в репозитории. Поменяй под свой репозиторий/ветку.
+GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/borisovv1905-art/matching-analytics/main/data'
+
+# Для каждого месяца — список xlsx-файлов (может быть один файл или несколько,
+# например май разбит на 2 файла из-за размера — они просто объединятся в один датафрейм).
 MONTHS = {
-    'Январь': {
-        'base_url': 'https://docs.google.com/spreadsheets/d/1ypPA0yGpFEPt8LilW45l6GMRDbBwGMhzCWWAN8iSE_c',
-        'sheets': {
-            'chart_data': {'gid': 261155966, 'name': 'Chart data'},
-            'stats': {'gid': 1180470564, 'name': 'Общая статистика'},
-            'class_stats': {'gid': 1842481687, 'name': 'Статистика'},
-            'skeleton': {'gid': 5709328, 'name': 'Скелет'}
-        }
-    },
-    'Февраль': {
-        'base_url': 'https://docs.google.com/spreadsheets/d/1Qj7znA3CDCodX8drqmxieTG7nxLEFukwIN4q3woOUzQ',
-        'sheets': {
-            'chart_data': {'gid': 1513590084, 'name': 'Chart data'},
-            'stats': {'gid': 383989852, 'name': 'Общая статистика'},
-            'class_stats': {'gid': 1439000990, 'name': 'Статистика'},
-            'skeleton': {'gid': 699313907, 'name': 'Скелет'}
-        }
-    },
-    'Март': {
-        'base_url': 'https://docs.google.com/spreadsheets/d/1USRFN4v9zEnY-UEoHVbSJ9I0QWx3aznWT_sbRqXWQBs',
-        'sheets': {
-            'chart_data': {'gid': 2117408418, 'name': 'Chart data'},
-            'stats': {'gid': 1182428016, 'name': 'Общая статистика'},
-            'class_stats': {'gid': 1935468458, 'name': 'Статистика'},
-            'skeleton': {'gid': 1169638280, 'name': 'Скелет'}
-        }
-    },
-    'Апрель': {
-        'base_url': 'https://docs.google.com/spreadsheets/d/1ZDH9o-pfVhVJdWRwSVrVsSIi77rMY44_3O482761mS0',
-        'sheets': {
-            'chart_data': {'gid': 1108293095, 'name': 'Chart data'},
-            'stats': {'gid': 1774326465, 'name': 'Общая статистика'},
-            'class_stats': {'gid': 210828249, 'name': 'Статистика'},
-            'skeleton': {'gid': 575620294, 'name': 'Скелет'}
-        }
-    }
+    'Январь': {'files': ['prod_jan2026.xlsx']},
+    'Февраль': {'files': ['prod_feb2026.xlsx']},
+    'Март': {'files': ['prod_mar2026.xlsx']},
+    'Апрель': {'files': ['prod_apr2026.xlsx']},
+    'Май': {'files': ['prod_may2026(mesh).xlsx', 'prod_may2026(standalone_eljur_search).xlsx']},
+}
+
+# Служебные листы внутри xlsx, которые НЕ являются данными диалогов — их пропускаем
+SKIP_SHEETS = {'Итоги_авто', 'ОБЩАЯ_СТАТИСТИКА', 'Статистика', 'Скелет'}
+
+# Переименование "родных" колонок из выгрузки в названия, которые ожидает остальной код
+COLUMN_RENAME = {
+    'Метчинг': 'status_only',
+    'Постметчинг': 'status_only_post',
 }
 
 # === ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ===
 
 @st.cache_data(ttl=3600)
-def load_csv(base_url, gid):
-    """Загружает лист Google Sheets как CSV с таймаутом"""
-    url = f"{base_url}/export?format=csv&gid={gid}"
+def load_xlsx_from_github(filename):
+    """Скачивает xlsx с GitHub и читает все листы разом"""
+    url = f"{GITHUB_RAW_BASE}/{filename}"
     try:
         import requests
-        response = requests.get(url, timeout=10)
+        from io import BytesIO
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
-        from io import StringIO
-        csv_data = StringIO(response.text)
-        df = pd.read_csv(csv_data, encoding='utf-8-sig')
-        return df
+        excel_file = BytesIO(response.content)
+        return pd.read_excel(excel_file, sheet_name=None, engine='openpyxl')
     except Exception as e:
-        st.error(f"💥 Ошибка загрузки: {e}")
-        return pd.DataFrame()
+        st.error(f"💥 Ошибка загрузки {filename}: {e}")
+        return {}
 
 @st.cache_data(ttl=3600)
 def load_month_data(month_name):
-    """Загружает данные из локальных CSV файлов"""
-    month_prefix = {'Январь': 'jan', 'Февраль': 'feb', 'Март': 'mar', 'Апрель': 'apr'}
-    prefix = month_prefix.get(month_name, 'jan')
-    data = {}
-    
+    """Загружает и объединяет данные месяца из xlsx-файлов на GitHub"""
+    month_config = MONTHS.get(month_name, {})
+    filenames = month_config.get('files', [])
+    data = {'chart': pd.DataFrame(), 'stats': pd.DataFrame(),
+            'class_stats': pd.DataFrame(), 'skeleton': pd.DataFrame()}
+
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
+
     try:
-        status_text.text(f"📊 {month_name}: Загрузка основных данных...")
-        try:
-            data['chart'] = pd.read_csv(f'data/{prefix}_chart_data.csv', encoding='utf-8-sig')
-        except FileNotFoundError:
-            data['chart'] = pd.DataFrame()
-        progress_bar.progress(25)
-        
-        status_text.text(f"📈 {month_name}: Загрузка статистики...")
-        try:
-            data['stats'] = pd.read_csv(f'data/{prefix}_stats.csv', encoding='utf-8-sig')
-        except FileNotFoundError:
-            data['stats'] = pd.DataFrame()
-        progress_bar.progress(50)
-        
-        status_text.text(f"📚 {month_name}: Загрузка по классам...")
-        try:
-            data['class_stats'] = pd.read_csv(f'data/{prefix}_class_stats.csv', encoding='utf-8-sig')
-        except FileNotFoundError:
-            data['class_stats'] = pd.DataFrame()
-        progress_bar.progress(75)
-        
-        status_text.text(f"🦴 {month_name}: Загрузка скелетов...")
-        try:
-            data['skeleton'] = pd.read_csv(f'data/{prefix}_skeleton.csv', encoding='utf-8-sig')
-            
-            # 🆕 Переименовываем status_only -> Скелет (если нужно)
-            if 'skeleton' in data and not data['skeleton'].empty:
-                if 'status_only' in data['skeleton'].columns and 'Скелет' not in data['skeleton'].columns:
-                    data['skeleton'] = data['skeleton'].rename(columns={'status_only': 'Скелет'})
-                    
-        except FileNotFoundError:
-            data['skeleton'] = pd.DataFrame()
+        dialog_frames = []
+        n_files = max(len(filenames), 1)
+
+        for i, filename in enumerate(filenames):
+            status_text.text(f"📊 {month_name}: загрузка {filename}...")
+            all_sheets = load_xlsx_from_github(filename)
+
+            for sheet_name, sheet_df in all_sheets.items():
+                if sheet_name in SKIP_SHEETS or sheet_df.empty:
+                    continue
+                if 'dialog_id' not in sheet_df.columns:
+                    continue  # это не лист с диалогами
+                sheet_df = sheet_df.copy()
+                sheet_df['источник_лист'] = sheet_name  # standalone/eljur/mesh/myschool/search...
+                dialog_frames.append(sheet_df)
+
+            progress_bar.progress(int((i + 1) / n_files * 70))
+
+        if dialog_frames:
+            df = pd.concat(dialog_frames, ignore_index=True, sort=False)
+            df = df.rename(columns=COLUMN_RENAME)
+            data['chart'] = df
+
+        progress_bar.progress(85)
+
+        # 🆕 class_stats считаем на лету (раньше был отдельный лист "Статистика")
+        status_text.text(f"📚 {month_name}: считаем статистику по классам...")
+        if not data['chart'].empty and 'Класс' in data['chart'].columns and 'Предмет' in data['chart'].columns:
+            data['class_stats'] = (
+                data['chart']
+                .groupby(['Класс', 'Предмет'])
+                .size()
+                .reset_index(name='Количество учеников')
+            )
+
+        # 🦴 skeleton берём прямо из общего датафрейма (там уже есть колонка "Скелет")
+        if not data['chart'].empty and 'Скелет' in data['chart'].columns:
+            skel_cols = [c for c in ['dialog_id', 'Диалог', 'Скелет', 'dialog_grade', 'dialog_role'] if c in data['chart'].columns]
+            data['skeleton'] = data['chart'][skel_cols].copy()
+
         progress_bar.progress(100)
     finally:
         progress_bar.empty()
         status_text.empty()
-    
+
     return data
 
 # === 🆕 УЛУЧШЕННАЯ ВИЗУАЛИЗАЦИЯ СКЕЛЕТА ===
@@ -296,7 +287,7 @@ def load_multiple_months(month_list):
 
 def main():
     st.title("📊 R&D Аналитика: Мэтчинг")
-    st.markdown("Визуализация данных по диалогам за январь–апрель 2026")
+    st.markdown("Визуализация данных по диалогам за январь–май 2026")
     
     # === САЙДБАР: ФИЛЬТРЫ ===
     with st.sidebar:
@@ -328,6 +319,21 @@ def main():
         # 🔍 Отладка: показать доступные продукты
         if st.checkbox("🔍 Показать продукты", value=False):
             st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
+
+        # === 🆕 Фильтр по исходной теме (initial_topic) ===
+        # Появляется только если колонка есть в данных этого месяца и в ней есть значения
+        # (сейчас реально заполнена только за май — в остальных месяцах фильтр просто не отобразится)
+        selected_initial_topic = 'Все'
+        has_initial_topic = (
+            'chart' in data and not data['chart'].empty
+            and 'initial_topic' in data['chart'].columns
+            and data['chart']['initial_topic'].notna().any()
+        )
+        if has_initial_topic:
+            topics = ['Все'] + sorted(
+                data['chart']['initial_topic'].dropna().unique().tolist()
+            )
+            selected_initial_topic = st.selectbox("📝 Исходная тема", topics)
         
         # === Фильтр по периоду ===
         date_range = None
@@ -382,6 +388,10 @@ def main():
     # 🆕 Фильтр по продукту
     if selected_product != 'Все' and 'product_slug' in df.columns:
         filter_mask &= df['product_slug'] == selected_product
+
+    # 🆕 Фильтр по исходной теме (initial_topic)
+    if selected_initial_topic != 'Все' and 'initial_topic' in df.columns:
+        filter_mask &= df['initial_topic'] == selected_initial_topic
 
     # Фильтр по периоду
     if date_range and 'activity_dt' in df.columns:
