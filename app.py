@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import re
 import time
+import requests
 
 # Настройка страницы
 st.set_page_config(
@@ -44,7 +45,6 @@ def load_xlsx_from_github(filename):
     """Скачивает xlsx с GitHub и читает все листы разом"""
     url = f"{GITHUB_RAW_BASE}/{filename}"
     try:
-        import requests
         from io import BytesIO
         response = requests.get(url, timeout=30)
         response.raise_for_status()
@@ -320,20 +320,32 @@ def main():
         if st.checkbox("🔍 Показать продукты", value=False):
             st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
 
-        # === 🆕 Фильтр по исходной теме (initial_topic) ===
-        # Появляется только если колонка есть в данных этого месяца и в ней есть значения
-        # (сейчас реально заполнена только за май — в остальных месяцах фильтр просто не отобразится)
-        selected_initial_topic = 'Все'
+        # === 🆕 Фильтр по источнику (standalone/eljur/mesh/myschool/search) ===
+        selected_source = 'Все'
+        if 'chart' in data and not data['chart'].empty and 'источник_лист' in data['chart'].columns:
+            sources = ['Все'] + sorted(data['chart']['источник_лист'].dropna().unique().tolist())
+            if len(sources) > 2:  # показываем фильтр, только если реально есть выбор
+                selected_source = st.selectbox("🗂 Источник", sources)
+
+        # === 🆕 Поиск по исходной теме (initial_topic) ===
+        # Поле свободного текста ученика — уникальных формулировок тысячи,
+        # поэтому это поиск по подстроке, а не выпадающий список.
+        # Появляется только если в данных этого месяца колонка есть и заполнена.
+        initial_topic_search = ''
         has_initial_topic = (
             'chart' in data and not data['chart'].empty
             and 'initial_topic' in data['chart'].columns
             and data['chart']['initial_topic'].notna().any()
         )
         if has_initial_topic:
-            topics = ['Все'] + sorted(
-                data['chart']['initial_topic'].dropna().unique().tolist()
+            initial_topic_search = st.text_input(
+                "📝 Поиск по исходной теме",
+                placeholder="например: дроби"
             )
-            selected_initial_topic = st.selectbox("📝 Исходная тема", topics)
+            with st.expander("💡 Топ-10 частых тем"):
+                top_topics = data['chart']['initial_topic'].dropna().value_counts().head(10)
+                for topic_text, cnt in top_topics.items():
+                    st.caption(f"{cnt} — {topic_text}")
         
         # === Фильтр по периоду ===
         date_range = None
@@ -389,9 +401,15 @@ def main():
     if selected_product != 'Все' and 'product_slug' in df.columns:
         filter_mask &= df['product_slug'] == selected_product
 
-    # 🆕 Фильтр по исходной теме (initial_topic)
-    if selected_initial_topic != 'Все' and 'initial_topic' in df.columns:
-        filter_mask &= df['initial_topic'] == selected_initial_topic
+    # 🆕 Фильтр по источнику
+    if selected_source != 'Все' and 'источник_лист' in df.columns:
+        filter_mask &= df['источник_лист'] == selected_source
+
+    # 🆕 Поиск по исходной теме (по подстроке, регистронезависимо)
+    if initial_topic_search and 'initial_topic' in df.columns:
+        filter_mask &= df['initial_topic'].astype(str).str.contains(
+            initial_topic_search, case=False, na=False, regex=False
+        )
 
     # Фильтр по периоду
     if date_range and 'activity_dt' in df.columns:
@@ -418,13 +436,17 @@ def main():
             filters_applied.append(f"период: {date_range[0]} - {date_range[1]}")
         if selected_product != 'Все':
             filters_applied.append(f"продукт: {selected_product}")
+        if selected_source != 'Все':
+            filters_applied.append(f"источник: {selected_source}")
+        if initial_topic_search:
+            filters_applied.append(f"тема содержит: «{initial_topic_search}»")
         
         st.info(f"🔍 Показано {len(df):,} из {len(data['chart']):,} диалогов (фильтры: {', '.join(filters_applied)})")
     
     # === ВКЛАДКИ ===
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Воронки", "📈 Динамика", "🦴 Скелеты", 
-        "📚 Классы/Предметы", "⏱️ Время", "🔄 Сравнение"
+        "📚 Классы/Предметы", "⏱️ Время", "🔄 Сравнение месяцев", "🔀 Сравнение источников"
     ])
     
     # === ВКЛАДКА 1: ВОРОНКИ (ПОСЛЕДОВАТЕЛЬНЫЕ) ===
@@ -891,6 +913,16 @@ def main():
                 
                 if selected_product != 'Все' and 'product_slug' in df_combined.columns:
                     df_combined = df_combined[df_combined['product_slug'] == selected_product]
+
+                if selected_source != 'Все' and 'источник_лист' in df_combined.columns:
+                    df_combined = df_combined[df_combined['источник_лист'] == selected_source]
+
+                if initial_topic_search and 'initial_topic' in df_combined.columns:
+                    df_combined = df_combined[
+                        df_combined['initial_topic'].astype(str).str.contains(
+                            initial_topic_search, case=False, na=False, regex=False
+                        )
+                    ]
                 
                 st.info(f"🔍 В сравнении участвует {len(df_combined):,} диалогов (после фильтров)")
                 
@@ -933,7 +965,127 @@ def main():
                 st.warning("⚠️ Не удалось загрузить данные для сравнения")
         else:
             st.info("ℹ️ Выберите минимум 2 месяца для сравнения")
-    
+
+    # === 🆕 ВКЛАДКА 7: СРАВНЕНИЕ ИСТОЧНИКОВ (mesh / eljur / standalone / myschool / search) ===
+    with tab7:
+        st.subheader(f"🔀 Сравнение источников — {selected_month}")
+
+        if 'chart' not in data or data['chart'].empty or 'источник_лист' not in data['chart'].columns:
+            st.info("ℹ️ В этом месяце нет данных по источникам.")
+        else:
+            # Берём все источники этого месяца, применяя те же фильтры, что и на других вкладках,
+            # КРОМЕ фильтра по источнику — иначе сравнивать было бы нечего
+            df_src = data['chart'].copy()
+
+            if selected_grade != 'Все' and 'dialog_grade' in df_src.columns:
+                df_src = df_src[df_src['dialog_grade'].astype(str) == selected_grade]
+            if selected_role != 'Все' and 'dialog_role' in df_src.columns:
+                df_src = df_src[df_src['dialog_role'] == selected_role]
+            if selected_product != 'Все' and 'product_slug' in df_src.columns:
+                df_src = df_src[df_src['product_slug'] == selected_product]
+            if date_range and 'activity_dt' in df_src.columns:
+                df_src['activity_dt'] = pd.to_datetime(df_src['activity_dt'], errors='coerce')
+                df_src = df_src[(df_src['activity_dt'].dt.date >= date_range[0]) & (df_src['activity_dt'].dt.date <= date_range[1])]
+            if initial_topic_search and 'initial_topic' in df_src.columns:
+                df_src = df_src[df_src['initial_topic'].astype(str).str.contains(initial_topic_search, case=False, na=False, regex=False)]
+
+            available_sources = sorted(df_src['источник_лист'].dropna().unique().tolist())
+
+            if len(available_sources) < 2:
+                st.info(f"ℹ️ В {selected_month} доступен только один источник ({available_sources[0] if available_sources else '—'}) — сравнивать не с чем.")
+            else:
+                selected_sources_compare = st.multiselect(
+                    "Источники для сравнения", available_sources, default=available_sources
+                )
+                df_src = df_src[df_src['источник_лист'].isin(selected_sources_compare)]
+
+                st.info(f"🔍 В сравнении участвует {len(df_src):,} диалогов")
+
+                # 1. Конверсия мэтчинга по источникам
+                if 'status_only' in df_src.columns and len(df_src) > 0:
+                    st.write("### 📊 Конверсия успешного мэтчинга по источникам")
+
+                    src_success = df_src[df_src['status_only'] == '(-) всё хорошо'].groupby('источник_лист').size()
+                    src_total = df_src.groupby('источник_лист').size()
+                    src_conv = (src_success / src_total * 100).round(1)
+
+                    src_conv_df = pd.DataFrame({
+                        'Источник': src_total.index,
+                        'Всего': src_total.values,
+                        'Успешные': src_success.reindex(src_total.index).fillna(0).astype(int).values,
+                    })
+                    src_conv_df['Конверсия (%)'] = (src_conv_df['Успешные'] / src_conv_df['Всего'] * 100).round(1)
+
+                    fig_src_conv = px.bar(
+                        src_conv_df, x='Источник', y='Конверсия (%)', color='Источник',
+                        title="Конверсия: успешный мэтчинг / всего диалогов, по источникам",
+                        text_auto='.1f%', color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    fig_src_conv.update_layout(height=400, showlegend=False)
+                    st.plotly_chart(fig_src_conv, use_container_width=True)
+
+                    st.dataframe(
+                        src_conv_df.style.format({'Конверсия (%)': '{:.1f}%'}),
+                        use_container_width=True
+                    )
+
+                # 2. Постметчинг по источникам (среди успешных)
+                if 'status_only_post' in df_src.columns and 'status_only' in df_src.columns:
+                    success_src_df = df_src[df_src['status_only'] == '(-) всё хорошо']
+                    if len(success_src_df) > 0:
+                        st.write("### 🎯 Дошли до финальной задачи (из успешных), по источникам")
+                        solved_by_src = success_src_df[
+                            success_src_df['status_only_post'] == '(-) решили финальную задачу'
+                        ].groupby('источник_лист').size()
+                        success_total_by_src = success_src_df.groupby('источник_лист').size()
+                        solved_rate = (solved_by_src.reindex(success_total_by_src.index).fillna(0) / success_total_by_src * 100).round(1)
+
+                        solved_df = pd.DataFrame({
+                            'Источник': success_total_by_src.index,
+                            'Успешных мэтчингов': success_total_by_src.values,
+                            'Решили финал (%)': solved_rate.values
+                        })
+
+                        fig_solved = px.bar(
+                            solved_df, x='Источник', y='Решили финал (%)', color='Источник',
+                            title="% решивших финальную задачу от успешно смэтченных",
+                            text_auto='.1f%', color_discrete_sequence=px.colors.qualitative.Set2
+                        )
+                        fig_solved.update_layout(height=350, showlegend=False)
+                        st.plotly_chart(fig_solved, use_container_width=True)
+
+                # 3. Время и сообщения по источникам
+                st.write("### ⏱️ Время и сообщения по источникам")
+                agg_cols = {}
+                if 'Время сессии в секундах' in df_src.columns:
+                    agg_cols['Время сессии в секундах'] = 'mean'
+                if 'Сообщений ученика' in df_src.columns:
+                    agg_cols['Сообщений ученика'] = 'mean'
+                if 'Сообщений тьютора' in df_src.columns:
+                    agg_cols['Сообщений тьютора'] = 'mean'
+
+                if agg_cols:
+                    src_time_stats = df_src.groupby('источник_лист').agg(agg_cols).round(1).reset_index()
+                    if 'Время сессии в секундах' in src_time_stats.columns:
+                        src_time_stats['Время сессии, мин'] = (src_time_stats['Время сессии в секундах'] / 60).round(1)
+                        src_time_stats = src_time_stats.drop(columns=['Время сессии в секундах'])
+                    src_time_stats = src_time_stats.rename(columns={'источник_лист': 'Источник'})
+                    st.dataframe(src_time_stats, use_container_width=True)
+
+                # 4. Динамика по дням, по источникам
+                if 'activity_dt' in df_src.columns:
+                    st.write("### 📈 Динамика диалогов по дням, по источникам")
+                    df_src['date'] = pd.to_datetime(df_src['activity_dt'], errors='coerce').dt.date
+                    daily_src = df_src.groupby(['источник_лист', 'date']).size().reset_index(name='Количество')
+                    daily_src = daily_src.rename(columns={'источник_лист': 'Источник'})
+
+                    fig_src_trend = px.line(
+                        daily_src, x='date', y='Количество', color='Источник',
+                        title="Количество диалогов по дням, по источникам", markers=True
+                    )
+                    fig_src_trend.update_layout(height=400, hovermode='x unified')
+                    st.plotly_chart(fig_src_trend, use_container_width=True)
+
     # === ЭКСПОРТ ===
     st.divider()
     col1, col2 = st.columns([3, 1])
