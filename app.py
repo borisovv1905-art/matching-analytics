@@ -298,81 +298,78 @@ def main():
     # === САЙДБАР: ФИЛЬТРЫ ===
     with st.sidebar:
         st.header("🎛 Фильтры")
-        
-    # «Все месяцы» ставим в начало, реальные месяцы — строго хронологически
-    month_options = [ALL_MONTHS_OPTION] + MONTH_ORDER
-    selected_month = st.selectbox("📅 Месяц", month_options, index=0)
-    
-    with st.spinner('Загрузка данных...'):
-        if selected_month == ALL_MONTHS_OPTION:
-            # --- режим «Все месяцы»: склеиваем все месяцы в один датафрейм ---
-            chart_frames, skel_frames = [], []
-            for m in MONTH_ORDER:
-                d = load_month_data(m)
-                if not d['chart'].empty:
-                    c = d['chart'].copy()
-                    c['Месяц'] = m
-                    chart_frames.append(c)
-                sk = d.get('skeleton', pd.DataFrame())
-                if not sk.empty:
-                    s = sk.copy()
-                    s['Месяц'] = m
-                    skel_frames.append(s)
-    
-            chart_all = pd.concat(chart_frames, ignore_index=True) if chart_frames else pd.DataFrame()
-            skel_all = pd.concat(skel_frames, ignore_index=True) if skel_frames else pd.DataFrame()
-    
-            # class_stats считаем так же, как внутри load_month_data
-            class_all = pd.DataFrame()
-            if not chart_all.empty and 'Класс' in chart_all.columns and 'Предмет' in chart_all.columns:
-                class_all = (
-                    chart_all.groupby(['Класс', 'Предмет'])
-                    .size()
-                    .reset_index(name='Количество учеников')
-                )
-    
-            data = {
-                'chart': chart_all,
-                'stats': pd.DataFrame(),
-                'class_stats': class_all,
-                'skeleton': skel_all,
-            }
-        else:
-            data = load_month_data(selected_month)
-        
+
+        # «Все месяцы» ставим в начало, реальные месяцы — строго хронологически
+        month_options = [ALL_MONTHS_OPTION] + MONTH_ORDER
+        selected_month = st.selectbox("📅 Месяц", month_options, index=0)
+
+        with st.spinner('Загрузка данных...'):
+            if selected_month == ALL_MONTHS_OPTION:
+                # --- режим «Все месяцы»: склеиваем все месяцы в один датафрейм ---
+                chart_frames, skel_frames = [], []
+                for m in MONTH_ORDER:
+                    d = load_month_data(m)
+                    if not d['chart'].empty:
+                        c = d['chart'].copy()
+                        c['Месяц'] = m
+                        chart_frames.append(c)
+                    sk = d.get('skeleton', pd.DataFrame())
+                    if not sk.empty:
+                        s = sk.copy()
+                        s['Месяц'] = m
+                        skel_frames.append(s)
+
+                chart_all = pd.concat(chart_frames, ignore_index=True) if chart_frames else pd.DataFrame()
+                skel_all = pd.concat(skel_frames, ignore_index=True) if skel_frames else pd.DataFrame()
+
+                class_all = pd.DataFrame()
+                if not chart_all.empty and 'Класс' in chart_all.columns and 'Предмет' in chart_all.columns:
+                    class_all = (
+                        chart_all.groupby(['Класс', 'Предмет'])
+                        .size()
+                        .reset_index(name='Количество учеников')
+                    )
+
+                data = {
+                    'chart': chart_all,
+                    'stats': pd.DataFrame(),
+                    'class_stats': class_all,
+                    'skeleton': skel_all,
+                }
+            else:
+                data = load_month_data(selected_month)
+
         # === Фильтр по классу ===
         selected_grade = 'Все'
         if 'chart' in data and not data['chart'].empty and 'dialog_grade' in data['chart'].columns:
             grades = ['Все'] + sorted(data['chart']['dialog_grade'].dropna().unique().astype(str).tolist())
             selected_grade = st.selectbox("📚 Класс", grades)
-        
-        # === 🆕 Фильтр по роли ===
+
+        # === Фильтр по роли ===
         selected_role = 'Все'
         if 'chart' in data and not data['chart'].empty and 'dialog_role' in data['chart'].columns:
             roles = ['Все'] + sorted(data['chart']['dialog_role'].dropna().unique().tolist())
             selected_role = st.selectbox("👤 Роль", roles)
 
-        # === 🆕 Фильтр по продукту ===
+        # === Фильтр по продукту ===
         selected_product = 'Все'
         if 'chart' in data and not data['chart'].empty and 'product_slug' in data['chart'].columns:
             products = ['Все'] + sorted(data['chart']['product_slug'].dropna().unique().tolist())
             selected_product = st.selectbox("📦 Продукт", products)
 
-        # 🔍 Отладка: показать доступные продукты
+        # Отладка: показать доступные продукты
         if st.checkbox("🔍 Показать продукты", value=False):
-            st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
+            if 'product_slug' in data['chart'].columns:
+                st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
 
-        # === 🆕 Фильтр по источнику (standalone/eljur/mesh/myschool/search) ===
+        # === Фильтр по источнику ===
         selected_source = 'Все'
         if 'chart' in data and not data['chart'].empty and 'источник_лист' in data['chart'].columns:
             sources = ['Все'] + sorted(data['chart']['источник_лист'].dropna().unique().tolist())
-            if len(sources) > 2:  # показываем фильтр, только если реально есть выбор
+            if len(sources) > 2:
                 selected_source = st.selectbox("🗂 Источник", sources)
 
-        # === 🆕 Поиск по исходной теме (initial_topic) ===
-        # Поле свободного текста ученика — уникальных формулировок тысячи,
-        # поэтому это поиск по подстроке, а не выпадающий список.
-        # Появляется только если в данных этого месяца колонка есть и заполнена.
+        # === Поиск по исходной теме ===
         initial_topic_search = ''
         has_initial_topic = (
             'chart' in data and not data['chart'].empty
@@ -388,7 +385,7 @@ def main():
                 top_topics = data['chart']['initial_topic'].dropna().value_counts().head(10)
                 for topic_text, cnt in top_topics.items():
                     st.caption(f"{cnt} — {topic_text}")
-        
+
         # === Фильтр по периоду ===
         date_range = None
         if 'chart' in data and not data['chart'].empty and 'activity_dt' in data['chart'].columns:
@@ -402,9 +399,9 @@ def main():
                     min_value=min_date.date(),
                     max_value=max_date.date()
                 )
-        
+
         st.divider()
-        
+
         if st.button("🔄 Обновить данные", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
@@ -954,7 +951,6 @@ def main():
             MONTH_ORDER,
             default=['Январь', 'Февраль'],
             key='compare_months',
-            disabled=compare_all,  # в режиме «все» ручной выбор серый — так нагляднее
         )
 
         # Живая обратная связь по текущему режиму
