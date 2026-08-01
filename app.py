@@ -30,6 +30,11 @@ MONTHS = {
     'Июнь': {'files': ['prod_jun2026.xlsx']},
 }
 
+# Хронологический порядок месяцев — единый источник правды для всей сортировки.
+# Порядок берётся из MONTHS, поэтому просто держи MONTHS в хронологическом порядке.
+MONTH_ORDER = list(MONTHS.keys())
+ALL_MONTHS_OPTION = '🗓 Все месяцы'
+
 # Служебные листы внутри xlsx, которые НЕ являются данными диалогов — их пропускаем
 SKIP_SHEETS = {'Итоги_авто', 'ОБЩАЯ_СТАТИСТИКА', 'Статистика', 'Скелет'}
 
@@ -294,9 +299,45 @@ def main():
     with st.sidebar:
         st.header("🎛 Фильтры")
         
-        selected_month = st.selectbox("📅 Месяц", list(MONTHS.keys()), index=0)
-        
-        with st.spinner('Загрузка данных...'):
+    # «Все месяцы» ставим в начало, реальные месяцы — строго хронологически
+    month_options = [ALL_MONTHS_OPTION] + MONTH_ORDER
+    selected_month = st.selectbox("📅 Месяц", month_options, index=0)
+    
+    with st.spinner('Загрузка данных...'):
+        if selected_month == ALL_MONTHS_OPTION:
+            # --- режим «Все месяцы»: склеиваем все месяцы в один датафрейм ---
+            chart_frames, skel_frames = [], []
+            for m in MONTH_ORDER:
+                d = load_month_data(m)
+                if not d['chart'].empty:
+                    c = d['chart'].copy()
+                    c['Месяц'] = m
+                    chart_frames.append(c)
+                sk = d.get('skeleton', pd.DataFrame())
+                if not sk.empty:
+                    s = sk.copy()
+                    s['Месяц'] = m
+                    skel_frames.append(s)
+    
+            chart_all = pd.concat(chart_frames, ignore_index=True) if chart_frames else pd.DataFrame()
+            skel_all = pd.concat(skel_frames, ignore_index=True) if skel_frames else pd.DataFrame()
+    
+            # class_stats считаем так же, как внутри load_month_data
+            class_all = pd.DataFrame()
+            if not chart_all.empty and 'Класс' in chart_all.columns and 'Предмет' in chart_all.columns:
+                class_all = (
+                    chart_all.groupby(['Класс', 'Предмет'])
+                    .size()
+                    .reset_index(name='Количество учеников')
+                )
+    
+            data = {
+                'chart': chart_all,
+                'stats': pd.DataFrame(),
+                'class_stats': class_all,
+                'skeleton': skel_all,
+            }
+        else:
             data = load_month_data(selected_month)
         
         # === Фильтр по классу ===
@@ -896,22 +937,55 @@ def main():
     # === 🆕 ВКЛАДКА 6: СРАВНЕНИЕ МЕСЯЦЕВ ===
     with tab6:
         st.subheader("🔄 Сравнение месяцев")
-        
-        # Мультивыбор месяцев
-        selected_months = st.multiselect("Выберите месяцы для сравнения", list(MONTHS.keys()), default=['Январь', 'Февраль'])
-        
+
+        # --- 🗓 Чекбокс «Сравнить все месяцы» ---
+        # При включении форсим в multiselect весь MONTH_ORDER через session_state
+        # и блокируем ручной выбор, чтобы состояние было однозначным.
+        compare_all = st.checkbox(
+            "🗓 Сравнить все месяцы сразу",
+            key='compare_all_toggle',
+            help="Включи, чтобы не проставлять галочки вручную — подставятся все месяцы в хронологическом порядке."
+        )
+        if compare_all:
+            st.session_state['compare_months'] = MONTH_ORDER[:]
+
+        selected_months = st.multiselect(
+            "Выберите месяцы для сравнения",
+            MONTH_ORDER,
+            default=['Январь', 'Февраль'],
+            key='compare_months',
+            disabled=compare_all,  # в режиме «все» ручной выбор серый — так нагляднее
+        )
+
+        # Живая обратная связь по текущему режиму
+        if compare_all:
+            st.caption(
+                f"🗓 Режим «все месяцы»: сравниваем **{len(selected_months)}** мес. — "
+                f"{' → '.join(selected_months)}"
+            )
+        elif selected_months:
+            st.caption(f"Выбрано месяцев: **{len(selected_months)}**")
+
         if len(selected_months) >= 2:
             with st.spinner('Загрузка данных для сравнения...'):
                 df_combined = load_multiple_months(selected_months)
-            
+
             if not df_combined.empty:
-                # 🆕 Применяем фильтры к объединённым данным
+                # 🆕 Жёстко задаём хронологический порядок месяцев
+                # (иначе groupby раскидает их по алфавиту: Апрель, Июнь, Май...)
+                if 'Месяц' in df_combined.columns:
+                    present_order = [m for m in MONTH_ORDER if m in df_combined['Месяц'].unique()]
+                    df_combined['Месяц'] = pd.Categorical(
+                        df_combined['Месяц'], categories=present_order, ordered=True
+                    )
+
+                # Применяем те же фильтры, что и на остальных вкладках
                 if selected_grade != 'Все' and 'dialog_grade' in df_combined.columns:
                     df_combined = df_combined[df_combined['dialog_grade'].astype(str) == selected_grade]
-                
+
                 if selected_role != 'Все' and 'dialog_role' in df_combined.columns:
                     df_combined = df_combined[df_combined['dialog_role'] == selected_role]
-                
+
                 if selected_product != 'Все' and 'product_slug' in df_combined.columns:
                     df_combined = df_combined[df_combined['product_slug'] == selected_product]
 
@@ -924,40 +998,38 @@ def main():
                             initial_topic_search, case=False, na=False, regex=False
                         )
                     ]
-                
+
                 st.info(f"🔍 В сравнении участвует {len(df_combined):,} диалогов (после фильтров)")
-                
+
                 # 1. Сравнение воронок
                 st.write("### 📊 Конверсия по месяцам")
-                
-                # Подсчёт успешных по месяцам
+
                 if 'status_only' in df_combined.columns:
                     monthly_success = df_combined[df_combined['status_only'] == '(-) всё хорошо'].groupby('Месяц').size()
                     monthly_total = df_combined.groupby('Месяц').size()
                     conversion_rate = (monthly_success / monthly_total * 100).round(1)
-                    
+
                     conv_df = pd.DataFrame({
                         'Месяц': conversion_rate.index,
                         'Конверсия (%)': conversion_rate.values,
                         'Всего': monthly_total.values,
                         'Успешные': monthly_success.values
                     })
-                    
+
                     fig_conv = px.bar(conv_df, x='Месяц', y='Конверсия (%)', color='Месяц',
                                      title="Конверсия: успешный мэтчинг / всего диалогов",
                                      text_auto='.1f%', color_discrete_sequence=px.colors.qualitative.Pastel)
                     fig_conv.update_layout(height=400, showlegend=False)
                     st.plotly_chart(fig_conv, use_container_width=True)
-                    
-                    # Таблица с деталями
+
                     st.dataframe(conv_df.style.format({'Конверсия (%)': '{:.1f}%'}), use_container_width=True)
-                
+
                 # 2. График тренда
                 if 'activity_dt' in df_combined.columns:
                     st.write("### 📈 Динамика по дням (все выбранные месяцы)")
                     df_combined['date'] = pd.to_datetime(df_combined['activity_dt']).dt.date
                     daily = df_combined.groupby(['Месяц', 'date']).size().reset_index(name='Количество')
-                    
+
                     fig_trend = px.line(daily, x='date', y='Количество', color='Месяц',
                                        title="Количество диалогов по дням", markers=True)
                     fig_trend.update_layout(height=400, hovermode='x unified')
