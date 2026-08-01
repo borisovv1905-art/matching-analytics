@@ -135,15 +135,14 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
     depth = 0
     step_num = 0
     
-    # 🎨 Яркая цветовая схема
     color_map = {
-        'plan': '#2E86AB',        # Яркий синий
-        'info': '#A23B72',        # Яркий розовый
-        'action': '#F18F01',      # Яркий оранжевый
-        'problem': '#C73E1D',     # Яркий красный
-        'bossaction': '#6A994E',  # Яркий зелёный
-        'summary': '#386641',     # Тёмно-зелёный
-        'other': '#6C757D'        # Серый
+        'plan': '#2E86AB',
+        'info': '#A23B72',
+        'action': '#F18F01',
+        'problem': '#C73E1D',
+        'bossaction': '#6A994E',
+        'summary': '#386641',
+        'other': '#6C757D'
     }
     
     for i, block in enumerate(blocks):
@@ -176,10 +175,8 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
         colors.append(color_map.get(block_type, '#6C757D'))
         block_types.append(block_type)
         
-        # 🔴 Увеличенные маркеры
-        sizes.append(15)  # Было 8-13, стало 15
+        sizes.append(15)
         
-        # 💡 Подробный tooltip
         hover_text = f"<b style='font-size:14px'>{label}</b><br>"
         hover_text += f"Порядок: {i+1}<br>"
         hover_text += f"Глубина: {depth}<br>"
@@ -187,43 +184,38 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
             hover_text += f"Шаг: {step_num}"
         hover_texts.append(hover_text)
         
-        # 🔤 Крупный текст на графике
         labels.append(f"{i+1}. {label}")
     
-    # 📊 Строим график
     fig = go.Figure()
     
-    # Основная линия (толще и ярче)
     fig.add_trace(go.Scatter(
         x=x_vals, y=y_vals,
         mode='lines+markers+text',
-        line=dict(color='#2E86AB', width=4),  # Толщина 4 вместо 2
+        line=dict(color='#2E86AB', width=4),
         marker=dict(
-            size=sizes,  # 15 вместо 8-13
+            size=sizes,
             color=colors,
-            line=dict(width=2, color='white'),  # Белая обводка
-            opacity=1.0  # Полная непрозрачность
+            line=dict(width=2, color='white'),
+            opacity=1.0
         ),
         text=labels,
         textposition='top center',
-        textfont=dict(size=12, color='#333333', family='Arial Black'),  # Жирный тёмный текст
+        textfont=dict(size=12, color='#333333', family='Arial Black'),
         hovertext=hover_texts,
         hoverinfo='text',
         name='Скелет',
         hoverlabel=dict(bgcolor='white', font_size=14, font_family='Arial')
     ))
     
-    # Вертикальные линии-скачки (более заметные)
     for i in range(len(blocks)-1):
         if blocks[i].startswith('action') and not blocks[i+1].startswith('action'):
             fig.add_trace(go.Scatter(
                 x=[i, i], y=[y_vals[i], 0],
                 mode='lines',
-                line=dict(color='#FF6B6B', width=2, dash='dash'),  # Красный пунктир
+                line=dict(color='#FF6B6B', width=2, dash='dash'),
                 showlegend=False, hoverinfo='skip', name='Переход'
             ))
     
-    # 🔴 Подсветка последнего блока (место отвала)
     if len(blocks) > 0:
         last_type = block_types[-1]
         if last_type in ['action', 'bossaction']:
@@ -234,7 +226,6 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
                 name='🔴 Отвал здесь', hoverinfo='skip', showlegend=True
             ))
     
-    # 🎨 Улучшенный layout
     fig.update_layout(
         title=dict(
             text=f"🦴 Скелет диалога{' #' + dialog_id[:8] if dialog_id else ''}",
@@ -248,13 +239,13 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
             text="Глубина погружения",
             font=dict(size=14, family='Arial', color='#555')
         ),
-        height=500,  # Чуть выше
+        height=500,
         hovermode='closest',
         yaxis=dict(
             autorange='reversed', 
             title='Шаг ↓', 
             showgrid=True, 
-            gridcolor='rgba(0,0,0,0.15)',  # Темнее сетка
+            gridcolor='rgba(0,0,0,0.15)',
             zerolinecolor='#333',
             zerolinewidth=2
         ),
@@ -262,7 +253,7 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
             showgrid=True,
             gridcolor='rgba(0,0,0,0.05)'
         ),
-        plot_bgcolor='white',  # Белый фон
+        plot_bgcolor='white',
         paper_bgcolor='white',
         legend=dict(
             orientation='h', 
@@ -272,12 +263,10 @@ def visualize_skeleton_enhanced(skeleton_text, dialog_text=None, dialog_id=None)
             x=1,
             font=dict(size=12)
         ),
-        margin=dict(l=60, r=60, t=80, b=60)  # Больше отступов
+        margin=dict(l=60, r=60, t=80, b=60)
     )
     
     return fig, blocks, block_types
-
-# === 🆕 ФУНКЦИЯ ДЛЯ СРАВНЕНИЯ МЕСЯЦЕВ ===
 
 def load_multiple_months(month_list):
     """Загружает данные для нескольких месяцев для сравнения"""
@@ -289,23 +278,21 @@ def load_multiple_months(month_list):
             combined[month] = data['chart']
     return pd.concat(combined.values(), ignore_index=True) if combined else pd.DataFrame()
 
-# === ОСНОВНОЙ ИНТЕРФЕЙС ===
-
 def main():
     st.title("📊 R&D Аналитика: Мэтчинг")
     st.markdown("Визуализация данных по диалогам за январь–июнь 2026")
     
-    # === САЙДБАР: ФИЛЬТРЫ ===
     with st.sidebar:
         st.header("🎛 Фильтры")
 
-        # «Все месяцы» ставим в начало, реальные месяцы — строго хронологически
+        # ВАЖНО: index=1 (конкретный месяц), а НЕ 0 ("Все месяцы") — иначе при
+        # каждом холодном запуске приложение тянет все месяцы разом, включая
+        # самый тяжёлый (mesh), и может падать по памяти на Streamlit Cloud.
         month_options = [ALL_MONTHS_OPTION] + MONTH_ORDER
-        selected_month = st.selectbox("📅 Месяц", month_options, index=0)
+        selected_month = st.selectbox("📅 Месяц", month_options, index=1)
 
         with st.spinner('Загрузка данных...'):
             if selected_month == ALL_MONTHS_OPTION:
-                # --- режим «Все месяцы»: склеиваем все месяцы в один датафрейм ---
                 chart_frames, skel_frames = [], []
                 for m in MONTH_ORDER:
                     d = load_month_data(m)
@@ -339,37 +326,31 @@ def main():
             else:
                 data = load_month_data(selected_month)
 
-        # === Фильтр по классу ===
         selected_grade = 'Все'
         if 'chart' in data and not data['chart'].empty and 'dialog_grade' in data['chart'].columns:
             grades = ['Все'] + sorted(data['chart']['dialog_grade'].dropna().unique().astype(str).tolist())
             selected_grade = st.selectbox("📚 Класс", grades)
 
-        # === Фильтр по роли ===
         selected_role = 'Все'
         if 'chart' in data and not data['chart'].empty and 'dialog_role' in data['chart'].columns:
             roles = ['Все'] + sorted(data['chart']['dialog_role'].dropna().unique().tolist())
             selected_role = st.selectbox("👤 Роль", roles)
 
-        # === Фильтр по продукту ===
         selected_product = 'Все'
         if 'chart' in data and not data['chart'].empty and 'product_slug' in data['chart'].columns:
             products = ['Все'] + sorted(data['chart']['product_slug'].dropna().unique().tolist())
             selected_product = st.selectbox("📦 Продукт", products)
 
-        # Отладка: показать доступные продукты
         if st.checkbox("🔍 Показать продукты", value=False):
             if 'product_slug' in data['chart'].columns:
                 st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
 
-        # === Фильтр по источнику ===
         selected_source = 'Все'
         if 'chart' in data and not data['chart'].empty and 'источник_лист' in data['chart'].columns:
             sources = ['Все'] + sorted(data['chart']['источник_лист'].dropna().unique().tolist())
             if len(sources) > 2:
                 selected_source = st.selectbox("🗂 Источник", sources)
 
-        # === Поиск по исходной теме ===
         initial_topic_search = ''
         has_initial_topic = (
             'chart' in data and not data['chart'].empty
@@ -386,7 +367,6 @@ def main():
                 for topic_text, cnt in top_topics.items():
                     st.caption(f"{cnt} — {topic_text}")
 
-        # === Фильтр по периоду ===
         date_range = None
         if 'chart' in data and not data['chart'].empty and 'activity_dt' in data['chart'].columns:
             data['chart']['activity_dt'] = pd.to_datetime(data['chart']['activity_dt'], errors='coerce')
@@ -406,12 +386,10 @@ def main():
             st.cache_data.clear()
             st.rerun()
 
-    # === ПРОВЕРКА ЗАГРУЗКИ ===
     if 'chart' not in data or data['chart'].empty:
         st.warning("⚠️ Не удалось загрузить данные.")
         return
     
-    # 🔍 ОТЛАДКА: показываем диапазон дат
     if 'activity_dt' in data['chart'].columns:
         
         min_date = data['chart']['activity_dt'].min()
@@ -424,47 +402,37 @@ def main():
                 f"Выбран месяц: **{selected_month}**"
             )
 
-    # === ПРИМЕНЯЕМ ФИЛЬТРЫ КО ВСЕМ ДАННЫМ ===
     df = data['chart'].copy()
     filter_mask = pd.Series([True] * len(df), index=df.index)
 
-    # Фильтр по классу
     if selected_grade != 'Все' and 'dialog_grade' in df.columns:
         filter_mask &= df['dialog_grade'].astype(str) == selected_grade
 
-    # 🆕 Фильтр по роли
     if selected_role != 'Все' and 'dialog_role' in df.columns:
         filter_mask &= df['dialog_role'] == selected_role
     
-    # 🆕 Фильтр по продукту
     if selected_product != 'Все' and 'product_slug' in df.columns:
         filter_mask &= df['product_slug'] == selected_product
 
-    # 🆕 Фильтр по источнику
     if selected_source != 'Все' and 'источник_лист' in df.columns:
         filter_mask &= df['источник_лист'] == selected_source
 
-    # 🆕 Поиск по исходной теме (по подстроке, регистронезависимо)
     if initial_topic_search and 'initial_topic' in df.columns:
         filter_mask &= df['initial_topic'].astype(str).str.contains(
             initial_topic_search, case=False, na=False, regex=False
         )
 
-    # Фильтр по периоду
     if date_range and 'activity_dt' in df.columns:
         filter_mask &= (df['activity_dt'].dt.date >= date_range[0]) & \
                     (df['activity_dt'].dt.date <= date_range[1])
 
-    # Применяем фильтр к основным данным
     df = df[filter_mask].copy()
 
-    # 🆕 Применяем фильтр к скелетам (если есть dialog_id в chart и skeleton)
     if 'skeleton' in data and not data['skeleton'].empty and 'dialog_id' in data['skeleton'].columns:
         filtered_ids = df['dialog_id'].unique() if 'dialog_id' in df.columns else []
         if len(filtered_ids) > 0:
             data['skeleton'] = data['skeleton'][data['skeleton']['dialog_id'].isin(filtered_ids)].copy()
 
-    # Показываем результат фильтрации
     if len(df) < len(data['chart']):
         filters_applied = []
         if selected_grade != 'Все':
@@ -482,13 +450,11 @@ def main():
         
         st.info(f"🔍 Показано {len(df):,} из {len(data['chart']):,} диалогов (фильтры: {', '.join(filters_applied)})")
     
-    # === ВКЛАДКИ ===
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Воронки", "📈 Динамика", "🦴 Скелеты", 
         "📚 Классы/Предметы", "⏱️ Время", "🔄 Сравнение месяцев", "🔀 Сравнение источников"
     ])
     
-    # === ВКЛАДКА 1: ВОРОНКИ (ПОСЛЕДОВАТЕЛЬНЫЕ) ===
     with tab1:
         st.subheader("🔄 Воронка мэтчинга")
         
@@ -507,7 +473,6 @@ def main():
                 }
             ]
             
-            # 1. Минус пустые запросы
             empty_requests = len(df[df['status_only'] == '(-) ничего не ввели'])
             after_empty = total_count - empty_requests
             funnel_stages.append({
@@ -516,7 +481,6 @@ def main():
                 'drop': -empty_requests
             })
             
-            # 2. Минус задачи вместо темы
             task_requests = len(df[df['status_only'] == '(-) ввели задачу'])
             after_task = after_empty - task_requests
             funnel_stages.append({
@@ -525,7 +489,6 @@ def main():
                 'drop': -task_requests
             })
             
-            # 3. Минус не математика
             not_math = len(df[df['status_only'] == '(-) ввели тему не по математике'])
             after_math = after_task - not_math
             funnel_stages.append({
@@ -534,7 +497,6 @@ def main():
                 'drop': -not_math
             })
             
-            # 4. Минус не 5-11 класс
             not_grade = len(df[df['status_only'] == '(-) ввели мат тему не 5-11'])
             after_grade = after_math - not_grade
             funnel_stages.append({
@@ -543,7 +505,6 @@ def main():
                 'drop': -not_grade
             })
             
-            # 5. Минус ушли после мэтчинга
             left_after = len(df[df['status_only'] == '(-) ушли после мэтчинга'])
             after_left = after_grade - left_after
             funnel_stages.append({
@@ -552,9 +513,8 @@ def main():
                 'drop': -left_after
             })
             
-            # 6. Успешный мэтчинг (всё хорошо)
             success = len(df[df['status_only'] == '(-) всё хорошо'])
-            matching_error = after_left - success  # разница — ошибка мэтчинга
+            matching_error = after_left - success
             
             funnel_stages.append({
                 'Этап': '🎉 Успешный мэтчинг',
@@ -562,10 +522,8 @@ def main():
                 'drop': -matching_error if matching_error > 0 else 0
             })
             
-            # Создаём DataFrame для графика
             funnel_df = pd.DataFrame(funnel_stages)
             
-            # Добавляем текст с цифрами
             funnel_df['Текст'] = funnel_df.apply(
                 lambda row: f"{row['count']:,} {row['drop']:+,}" if row['drop'] != 0 else f"{row['count']:,}",
                 axis=1
@@ -573,7 +531,6 @@ def main():
             
             filter_info = f" (после фильтров: {total_count:,} диалогов)" if total_count < len(data['chart']) else ""
             
-            # Строим воронку
             fig_funnel = px.funnel(
                 funnel_df,
                 x='count',
@@ -583,7 +540,6 @@ def main():
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
             
-            # Добавляем аннотации с цифрами отвалов
             for i, row in funnel_df.iterrows():
                 if row['drop'] != 0:
                     fig_funnel.add_annotation(
@@ -599,12 +555,11 @@ def main():
             fig_funnel.update_layout(
                 height=600,
                 showlegend=False,
-                yaxis=dict(autorange='reversed')  # Переворачиваем: сверху вниз
+                yaxis=dict(autorange='reversed')
             )
             
             st.plotly_chart(fig_funnel, use_container_width=True)
             
-            # 🔵 ВОРОНКА ПОСТ-МЭТЧИНГА (последовательная)
             st.divider()
             st.subheader("🎯 Пост-мэтчинг: углубление в диалог")
             
@@ -614,7 +569,6 @@ def main():
                 if len(successful_df) > 0:
                     total_success = len(successful_df)
                     
-                    # Последовательная воронка для пост-мэтчинга
                     post_funnel = [
                         {
                             'Этап': '🎉 Успешный мэтчинг',
@@ -623,7 +577,6 @@ def main():
                         }
                     ]
                     
-                    # 1. Увидели план
                     saw_plan = len(successful_df[successful_df['status_only_post'] == '(-) ушли после плана'])
                     after_plan = total_success - saw_plan
                     post_funnel.append({
@@ -632,7 +585,6 @@ def main():
                         'drop': -saw_plan
                     })
                     
-                    # 2. Ушли после первого шага
                     left_step1 = len(successful_df[successful_df['status_only_post'] == '(-) ушли после первого шага'])
                     after_step1 = after_plan - left_step1
                     post_funnel.append({
@@ -641,7 +593,6 @@ def main():
                         'drop': -left_step1
                     })
                     
-                    # 3. Ушли после 2+ шагов
                     left_step2 = len(successful_df[successful_df['status_only_post'] == '(-) ушли после 2-го и более шага'])
                     after_step2 = after_step1 - left_step2
                     post_funnel.append({
@@ -650,7 +601,6 @@ def main():
                         'drop': -left_step2
                     })
                     
-                    # 4. Увидели финал
                     saw_final = len(successful_df[successful_df['status_only_post'] == '(-) увидели финальную задачу'])
                     after_final = after_step2 - saw_final
                     post_funnel.append({
@@ -659,7 +609,6 @@ def main():
                         'drop': -saw_final
                     })
                     
-                    # 5. Решили финал
                     solved_final = len(successful_df[successful_df['status_only_post'] == '(-) решили финальную задачу'])
                     post_funnel.append({
                         'Этап': '🏆 Решили финал',
@@ -667,14 +616,12 @@ def main():
                         'drop': -(after_final - solved_final) if after_final > solved_final else 0
                     })
                     
-                    # Создаём DataFrame
                     post_df = pd.DataFrame(post_funnel)
                     post_df['Текст'] = post_df.apply(
                         lambda row: f"{row['count']:,} {row['drop']:+,}" if row['drop'] != 0 else f"{row['count']:,}",
                         axis=1
                     )
                     
-                    # Строим воронку
                     fig_post = px.funnel(
                         post_df,
                         x='count',
@@ -684,7 +631,6 @@ def main():
                         color_discrete_sequence=px.colors.sequential.Blues
                     )
                     
-                    # Добавляем аннотации
                     for i, row in post_df.iterrows():
                         if row['drop'] != 0:
                             fig_post.add_annotation(
@@ -704,7 +650,6 @@ def main():
                     
                     st.plotly_chart(fig_post, use_container_width=True)
                     
-                    # Показываем детали
                     st.write(f"**Всего успешных:** {total_success:,}")
                     st.write(f"**Решили финал:** {solved_final:,} ({solved_final/total_success*100:.1f}%)")
                 else:
@@ -712,7 +657,6 @@ def main():
             else:
                 st.warning("⚠️ Столбец 'status_only_post' не найден в данных.")
     
-    # === ВКЛАДКА 2: ДИНАМИКА ПО ДАТАМ ===
     with tab2:
         st.subheader("📈 Количество диалогов по датам")
         if 'activity_dt' in df.columns:
@@ -743,36 +687,30 @@ def main():
         else:
             st.info("ℹ️ Столбец activity_dt не найден")
     
-    # === 🆕 ВКЛАДКА 3: СКЕЛЕТЫ ДИАЛОГОВ (УЛУЧШЕННЫЕ) ===
     with tab3:
         st.subheader("🦴 Визуализация скелетов диалогов")
         
         if 'skeleton' in data and not data['skeleton'].empty:
             skel_df = data['skeleton']
             
-            # 🔍 Проверка: есть ли выбранный диалог из вкладки "Время"
             search_id = ""
             if 'selected_dialog_id' in st.session_state:
                 search_id = st.session_state['selected_dialog_id']
-                del st.session_state['selected_dialog_id']  # Очищаем после использования
+                del st.session_state['selected_dialog_id']
                 st.info(f"🎯 Открыт диалог из вкладки «Время»: {search_id[:36]}...")
             
-            # Поиск диалога по ID (ручной ввод)
             if not search_id:
                 search_id = st.text_input("🔍 ID диалога (или часть)", placeholder="003a9e82...")
             
-            # 🆕 Быстрый выбор из списка диалогов
             st.divider()
             st.subheader("📋 Быстрый выбор диалога")
             
             if len(skel_df) > 0 and 'dialog_id' in skel_df.columns:
-                # Создаём список для выбора с информацией
                 dialog_options = {}
-                for idx, row in skel_df.head(100).iterrows():  # Первые 100 диалогов
+                for idx, row in skel_df.head(100).iterrows():
                     dialog_id = row['dialog_id']
                     dialog_info = f"{dialog_id[:36]}..."
                     
-                    # Добавляем доп. информацию, если есть
                     if 'Тег' in row and pd.notna(row['Тег']):
                         dialog_info += f" | {row['Тег']}"
                     if 'dialog_grade' in row and pd.notna(row['dialog_grade']):
@@ -793,7 +731,6 @@ def main():
                     search_id = dialog_options[selected_dialog_label]
                     st.info(f"✅ Выбран диалог: {search_id[:36]}...")
             
-            # 🔍 Поиск и визуализация
             if search_id and 'dialog_id' in skel_df.columns:
                 result = skel_df[skel_df['dialog_id'].astype(str).str.contains(search_id, case=False)]
                 if not result.empty:
@@ -801,13 +738,11 @@ def main():
                     skeleton = row.get('Скелет', row.get('скелет', ''))
                     dialog = row.get('Диалог', '')
                     
-                    # Визуализация с деталями
                     result_viz = visualize_skeleton_enhanced(skeleton, dialog, row.get('dialog_id'))
                     if isinstance(result_viz, tuple):
                         fig, blocks, block_types = result_viz
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # 🆕 Интерактивные детали при выборе блока
                         st.write("🔍 **Детали блоков:**")
                         selected_block = st.selectbox("Выберите блок для просмотра", 
                                                     [f"{i+1}. {b} ({t})" for i, (b,t) in enumerate(zip(blocks, block_types))])
@@ -817,19 +752,16 @@ def main():
                             block_name = blocks[idx]
                             block_type = block_types[idx]
                             
-                            # 📊 Расчёт глубины
                             depth = sum(1 for b in blocks[:idx+1] if b.startswith('action') or b.startswith('bossaction'))
                             
-                            # 📝 Разбиваем диалог на части по количеству блоков
                             dialog_snippet = ""
                             if dialog and pd.notna(dialog):
                                 dialog_lines = dialog.split('\n')
                                 total_lines = len(dialog_lines)
                                 lines_per_block = max(1, total_lines // len(blocks))
                                 
-                                # Вычисляем начало и конец фрагмента для этого блока
                                 start_line = idx * lines_per_block
-                                end_line = min(start_line + lines_per_block + 5, total_lines)  # +5 для контекста
+                                end_line = min(start_line + lines_per_block + 5, total_lines)
                                 
                                 snippet_lines = dialog_lines[start_line:end_line]
                                 dialog_snippet = '\n'.join(snippet_lines)
@@ -849,7 +781,6 @@ def main():
                 else:
                     st.warning("❌ Диалог не найден")
             
-            # Браузер всех скелетов
             st.divider()
             st.write("📚 Браузер диалогов")
             if 'dialog_id' in skel_df.columns:
@@ -877,7 +808,6 @@ def main():
         else:
             st.info("ℹ️ Данные по классам/предметам не загружены")
     
-    # === ВКЛАДКА 5: ВРЕМЯ СЕССИЙ ===
     with tab5:
         st.subheader("⏱️ Метрики времени сессий")
         time_cols = [c for c in df.columns if 'Время' in c or 'Сообщений' in c]
@@ -891,7 +821,6 @@ def main():
             if 'Сообщений тьютора' in df.columns:
                 with col4: st.metric("🤖 Ср. сообщений (бот)", f"{df['Сообщений тьютора'].mean():.1f}")
             
-            # 🆕 Топ самых длинных сессий
             st.divider()
             st.subheader("🏆 Топ самых длинных сессий")
             
@@ -904,7 +833,6 @@ def main():
                 
                 st.write(f"💡 **Кликни по ID диалога, чтобы открыть его скелет**")
                 
-                # Показываем таблицу с ссылками
                 for idx, row in top_sessions.iterrows():
                     col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
                     with col1:
@@ -918,7 +846,6 @@ def main():
                     with col5:
                         st.text(row['product_slug'][:10] if pd.notna(row['product_slug']) else "")
                 
-                # Кнопка для копирования ID
                 selected_dialog = st.selectbox(
                     " Выбери диалог для просмотра скелета",
                     options=top_sessions['dialog_id'].tolist(),
@@ -931,13 +858,15 @@ def main():
         else:
             st.info("ℹ️ Столбцы с метриками времени не найдены")
     
-    # === 🆕 ВКЛАДКА 6: СРАВНЕНИЕ МЕСЯЦЕВ ===
     with tab6:
         st.subheader("🔄 Сравнение месяцев")
 
-        # --- 🗓 Чекбокс «Сравнить все месяцы» ---
-        # При включении форсим в multiselect весь MONTH_ORDER через session_state
-        # и блокируем ручной выбор, чтобы состояние было однозначным.
+        # Начальное значение задаём через session_state ДО создания виджета,
+        # и только один раз — иначе конфликт с default= у multiselect ниже
+        # (Streamlit не разрешает одновременно default= и прямую запись в session_state[key])
+        if 'compare_months' not in st.session_state:
+            st.session_state['compare_months'] = ['Январь', 'Февраль']
+
         compare_all = st.checkbox(
             "🗓 Сравнить все месяцы сразу",
             key='compare_all_toggle',
@@ -949,11 +878,9 @@ def main():
         selected_months = st.multiselect(
             "Выберите месяцы для сравнения",
             MONTH_ORDER,
-            default=['Январь', 'Февраль'],
             key='compare_months',
         )
 
-        # Живая обратная связь по текущему режиму
         if compare_all:
             st.caption(
                 f"🗓 Режим «все месяцы»: сравниваем **{len(selected_months)}** мес. — "
@@ -967,15 +894,12 @@ def main():
                 df_combined = load_multiple_months(selected_months)
 
             if not df_combined.empty:
-                # 🆕 Жёстко задаём хронологический порядок месяцев
-                # (иначе groupby раскидает их по алфавиту: Апрель, Июнь, Май...)
                 if 'Месяц' in df_combined.columns:
                     present_order = [m for m in MONTH_ORDER if m in df_combined['Месяц'].unique()]
                     df_combined['Месяц'] = pd.Categorical(
                         df_combined['Месяц'], categories=present_order, ordered=True
                     )
 
-                # Применяем те же фильтры, что и на остальных вкладках
                 if selected_grade != 'Все' and 'dialog_grade' in df_combined.columns:
                     df_combined = df_combined[df_combined['dialog_grade'].astype(str) == selected_grade]
 
@@ -997,7 +921,6 @@ def main():
 
                 st.info(f"🔍 В сравнении участвует {len(df_combined):,} диалогов (после фильтров)")
 
-                # 1. Сравнение воронок
                 st.write("### 📊 Конверсия по месяцам")
 
                 if 'status_only' in df_combined.columns:
@@ -1020,7 +943,6 @@ def main():
 
                     st.dataframe(conv_df.style.format({'Конверсия (%)': '{:.1f}%'}), use_container_width=True)
 
-                # 2. График тренда
                 if 'activity_dt' in df_combined.columns:
                     st.write("### 📈 Динамика по дням (все выбранные месяцы)")
                     df_combined['date'] = pd.to_datetime(df_combined['activity_dt']).dt.date
@@ -1035,15 +957,12 @@ def main():
         else:
             st.info("ℹ️ Выберите минимум 2 месяца для сравнения")
 
-    # === 🆕 ВКЛАДКА 7: СРАВНЕНИЕ ИСТОЧНИКОВ (mesh / eljur / standalone / myschool / search) ===
     with tab7:
         st.subheader(f"🔀 Сравнение источников — {selected_month}")
 
         if 'chart' not in data or data['chart'].empty or 'источник_лист' not in data['chart'].columns:
             st.info("ℹ️ В этом месяце нет данных по источникам.")
         else:
-            # Берём все источники этого месяца, применяя те же фильтры, что и на других вкладках,
-            # КРОМЕ фильтра по источнику — иначе сравнивать было бы нечего
             df_src = data['chart'].copy()
 
             if selected_grade != 'Все' and 'dialog_grade' in df_src.columns:
@@ -1070,7 +989,6 @@ def main():
 
                 st.info(f"🔍 В сравнении участвует {len(df_src):,} диалогов")
 
-                # 1. Конверсия мэтчинга по источникам
                 if 'status_only' in df_src.columns and len(df_src) > 0:
                     st.write("### 📊 Конверсия успешного мэтчинга по источникам")
 
@@ -1098,7 +1016,6 @@ def main():
                         use_container_width=True
                     )
 
-                # 2. Постметчинг по источникам (среди успешных)
                 if 'status_only_post' in df_src.columns and 'status_only' in df_src.columns:
                     success_src_df = df_src[df_src['status_only'] == '(-) всё хорошо']
                     if len(success_src_df) > 0:
@@ -1123,7 +1040,6 @@ def main():
                         fig_solved.update_layout(height=350, showlegend=False)
                         st.plotly_chart(fig_solved, use_container_width=True)
 
-                # 3. Время и сообщения по источникам
                 st.write("### ⏱️ Время и сообщения по источникам")
                 agg_cols = {}
                 if 'Время сессии в секундах' in df_src.columns:
@@ -1141,7 +1057,6 @@ def main():
                     src_time_stats = src_time_stats.rename(columns={'источник_лист': 'Источник'})
                     st.dataframe(src_time_stats, use_container_width=True)
 
-                # 4. Динамика по дням, по источникам
                 if 'activity_dt' in df_src.columns:
                     st.write("### 📈 Динамика диалогов по дням, по источникам")
                     df_src['date'] = pd.to_datetime(df_src['activity_dt'], errors='coerce').dt.date
@@ -1155,7 +1070,6 @@ def main():
                     fig_src_trend.update_layout(height=400, hovermode='x unified')
                     st.plotly_chart(fig_src_trend, use_container_width=True)
 
-    # === ЭКСПОРТ ===
     st.divider()
     col1, col2 = st.columns([3, 1])
     with col2:
