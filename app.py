@@ -27,6 +27,7 @@ MONTHS = {
     'Март': {'files': ['prod_mar2026.xlsx']},
     'Апрель': {'files': ['prod_apr2026.xlsx']},
     'Май': {'files': ['prod_may2026(mesh).xlsx', 'prod_may2026(standalone_eljur_search).xlsx']},
+    'Июнь': {'files': ['prod_jun2026.xlsx']},
 }
 
 # Служебные листы внутри xlsx, которые НЕ являются данными диалогов — их пропускаем
@@ -287,7 +288,7 @@ def load_multiple_months(month_list):
 
 def main():
     st.title("📊 R&D Аналитика: Мэтчинг")
-    st.markdown("Визуализация данных по диалогам за январь–май 2026")
+    st.markdown("Визуализация данных по диалогам за январь–июнь 2026")
     
     # === САЙДБАР: ФИЛЬТРЫ ===
     with st.sidebar:
