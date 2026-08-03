@@ -426,21 +426,19 @@ def main():
             if len(sources) > 2:
                 selected_source = st.selectbox("🗂 Источник", sources)
 
-        initial_topic_search = ''
-        has_initial_topic = (
+        # === Фильтр по источнику входа: журнал (тема заполнена) / баннер (тема пустая) ===
+        # initial_topic заполнено только там, где ученик пришёл из журнала (там тема
+        # урока уже известна заранее); если пусто — значит зашёл с баннера/без темы.
+        entry_source_filter = 'Все'
+        has_initial_topic_col = (
             'chart' in data and not data['chart'].empty
             and 'initial_topic' in data['chart'].columns
-            and data['chart']['initial_topic'].notna().any()
         )
-        if has_initial_topic:
-            initial_topic_search = st.text_input(
-                "📝 Поиск по исходной теме",
-                placeholder="например: дроби"
+        if has_initial_topic_col:
+            entry_source_filter = st.selectbox(
+                "🚪 Источник входа",
+                ['Все', '📓 Из журнала (тема есть)', '🖼 С баннера (темы нет)']
             )
-            with st.expander("💡 Топ-10 частых тем"):
-                top_topics = data['chart']['initial_topic'].dropna().value_counts().head(10)
-                for topic_text, cnt in top_topics.items():
-                    st.caption(f"{cnt} — {topic_text}")
 
         date_range = None
         if 'chart' in data and not data['chart'].empty and 'activity_dt' in data['chart'].columns:
@@ -492,10 +490,11 @@ def main():
     if selected_source != 'Все' and 'источник_лист' in df.columns:
         filter_mask &= df['источник_лист'] == selected_source
 
-    if initial_topic_search and 'initial_topic' in df.columns:
-        filter_mask &= df['initial_topic'].astype(str).str.contains(
-            initial_topic_search, case=False, na=False, regex=False
-        )
+    if entry_source_filter != 'Все' and 'initial_topic' in df.columns:
+        if entry_source_filter == '📓 Из журнала (тема есть)':
+            filter_mask &= df['initial_topic'].notna() & (df['initial_topic'].astype(str).str.strip() != '')
+        else:  # 🖼 С баннера (темы нет)
+            filter_mask &= df['initial_topic'].isna() | (df['initial_topic'].astype(str).str.strip() == '')
 
     if date_range and 'activity_dt' in df.columns:
         filter_mask &= (df['activity_dt'].dt.date >= date_range[0]) & \
@@ -520,8 +519,8 @@ def main():
             filters_applied.append(f"продукт: {selected_product}")
         if selected_source != 'Все':
             filters_applied.append(f"источник: {selected_source}")
-        if initial_topic_search:
-            filters_applied.append(f"тема содержит: «{initial_topic_search}»")
+        if entry_source_filter != 'Все':
+            filters_applied.append(f"вход: {entry_source_filter}")
         
         st.info(f"🔍 Показано {len(df):,} из {len(data['chart']):,} диалогов (фильтры: {', '.join(filters_applied)})")
     
@@ -992,12 +991,15 @@ def main():
                 if selected_source != 'Все' and 'источник_лист' in df_combined.columns:
                     df_combined = df_combined[df_combined['источник_лист'] == selected_source]
 
-                if initial_topic_search and 'initial_topic' in df_combined.columns:
-                    df_combined = df_combined[
-                        df_combined['initial_topic'].astype(str).str.contains(
-                            initial_topic_search, case=False, na=False, regex=False
-                        )
-                    ]
+                if entry_source_filter != 'Все' and 'initial_topic' in df_combined.columns:
+                    if entry_source_filter == '📓 Из журнала (тема есть)':
+                        df_combined = df_combined[
+                            df_combined['initial_topic'].notna() & (df_combined['initial_topic'].astype(str).str.strip() != '')
+                        ]
+                    else:
+                        df_combined = df_combined[
+                            df_combined['initial_topic'].isna() | (df_combined['initial_topic'].astype(str).str.strip() == '')
+                        ]
 
                 st.info(f"🔍 В сравнении участвует {len(df_combined):,} диалогов (после фильтров)")
 
@@ -1054,8 +1056,11 @@ def main():
             if date_range and 'activity_dt' in df_src.columns:
                 df_src['activity_dt'] = pd.to_datetime(df_src['activity_dt'], errors='coerce')
                 df_src = df_src[(df_src['activity_dt'].dt.date >= date_range[0]) & (df_src['activity_dt'].dt.date <= date_range[1])]
-            if initial_topic_search and 'initial_topic' in df_src.columns:
-                df_src = df_src[df_src['initial_topic'].astype(str).str.contains(initial_topic_search, case=False, na=False, regex=False)]
+            if entry_source_filter != 'Все' and 'initial_topic' in df_src.columns:
+                if entry_source_filter == '📓 Из журнала (тема есть)':
+                    df_src = df_src[df_src['initial_topic'].notna() & (df_src['initial_topic'].astype(str).str.strip() != '')]
+                else:
+                    df_src = df_src[df_src['initial_topic'].isna() | (df_src['initial_topic'].astype(str).str.strip() == '')]
 
             available_sources = sorted(df_src['источник_лист'].dropna().unique().tolist())
 
