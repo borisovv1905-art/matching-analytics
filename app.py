@@ -45,6 +45,21 @@ COLUMN_RENAME = {
     'Постметчинг': 'status_only_post',
 }
 
+# Названия листов внутри xlsx уже содержат месяц (напр. 'eljur_март', 'standalone_январь').
+# Это ломает сравнение источников при объединении месяцев — 'eljur' за разные месяцы
+# превращается в кучу разных "источников" вместо одного. Чистим суффикс месяца.
+_MONTH_SUFFIXES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                    'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
+
+def extract_base_source(sheet_name):
+    """'eljur_март' -> 'eljur'; 'standalone_январь' -> 'standalone'"""
+    if not isinstance(sheet_name, str):
+        return sheet_name
+    parts = sheet_name.rsplit('_', 1)
+    if len(parts) == 2 and parts[1].lower() in _MONTH_SUFFIXES:
+        return parts[0]
+    return sheet_name
+
 # === ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ===
 
 @st.cache_data(ttl=3600)
@@ -121,7 +136,7 @@ def load_month_data(month_name):
                 if 'dialog_id' not in sheet_df.columns:
                     continue  # это не лист с диалогами
                 sheet_df = sheet_df.copy()
-                sheet_df['источник_лист'] = sheet_name  # standalone/eljur/mesh/myschool/search...
+                sheet_df['источник_лист'] = extract_base_source(sheet_name)  # standalone/eljur/mesh/myschool/search (без месяца)
                 dialog_frames.append(sheet_df)
 
             progress_bar.progress(int((i + 1) / n_files * 70))
