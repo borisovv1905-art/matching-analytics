@@ -503,9 +503,11 @@ def main():
     df = df[filter_mask].copy()
 
     if 'skeleton' in data and not data['skeleton'].empty and 'dialog_id' in data['skeleton'].columns:
+        # ⚠️ Раньше тут была проверка "если после фильтров осталось 0 диалогов — не фильтровать",
+        # из-за которой скелеты при 0 совпадениях показывали ВСЕ диалоги вместо пустого списка.
+        # Теперь фильтруем всегда, даже если результат — пустой набор id.
         filtered_ids = df['dialog_id'].unique() if 'dialog_id' in df.columns else []
-        if len(filtered_ids) > 0:
-            data['skeleton'] = data['skeleton'][data['skeleton']['dialog_id'].isin(filtered_ids)].copy()
+        data['skeleton'] = data['skeleton'][data['skeleton']['dialog_id'].isin(filtered_ids)].copy()
 
     if len(df) < len(data['chart']):
         filters_applied = []
@@ -868,15 +870,55 @@ def main():
             else:
                 st.info("ℹ️ Столбец dialog_id не найден")
         else:
-            st.info("ℹ️ Данные по скелетам не загружены")
+            st.info("ℹ️ Нет диалогов, подходящих под текущие фильтры (или данные по скелетам не загружены)")
 
     with tab4:
         st.subheader("📚 Распределение по классам и предметам")
+
+        # === 🆕 Класс УЧЕНИКА (dialog_grade) — из каких классов реально приходят дети ===
+        # Это не то же самое, что 'Класс' ниже (тот — класс ПОДОБРАННОЙ темы).
+        # dialog_grade диапазон 1-12 (не только 5-11), поэтому считаем отдельно
+        # и по ВСЕМ диалогам (в рамках текущих фильтров), а не только по успешно смэтченным.
+        if 'dialog_grade' in df.columns and df['dialog_grade'].notna().any():
+            st.write("### 🎓 Класс ученика — откуда реально приходят дети")
+            grade_counts = (
+                df['dialog_grade']
+                .dropna()
+                .astype(str)
+                .value_counts()
+                .reset_index()
+            )
+            grade_counts.columns = ['Класс ученика', 'Количество диалогов']
+
+            # сортируем по номеру класса, а не по алфавиту (иначе '10' окажется перед '2')
+            def _grade_sort_key(v):
+                try:
+                    return int(v)
+                except (ValueError, TypeError):
+                    return 999
+            grade_counts['_sort'] = grade_counts['Класс ученика'].apply(_grade_sort_key)
+            grade_counts = grade_counts.sort_values('_sort').drop(columns='_sort')
+
+            fig_dialog_grade = px.bar(
+                grade_counts, x='Класс ученика', y='Количество диалогов',
+                color='Класс ученика', title="Диалоги по классу ученика (dialog_grade)",
+                text_auto='.0f', color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig_dialog_grade.update_layout(height=400, showlegend=False, xaxis={'type': 'category'})
+            st.plotly_chart(fig_dialog_grade, use_container_width=True)
+            st.caption(
+                f"Всего диалогов с указанным классом ученика: {grade_counts['Количество диалогов'].sum():,} "
+                f"из {len(df):,} (в рамках текущих фильтров)"
+            )
+            st.divider()
+
         if 'class_stats' in data and not data['class_stats'].empty:
             class_df = data['class_stats']
             if 'Класс' in class_df.columns and 'Количество учеников' in class_df.columns:
+                st.write("### 📖 Класс подобранной темы")
+                st.caption("Это класс темы, которую подобрал алгоритм мэтчинга — не обязательно совпадает с реальным классом ученика выше.")
                 fig_class = px.bar(class_df.sort_values('Класс'), x='Класс', y='Количество учеников',
-                                  color='Класс', title="Диалоги по классам", text_auto='.0f')
+                                  color='Класс', title="Диалоги по классу темы", text_auto='.0f')
                 fig_class.update_layout(height=400, showlegend=False)
                 st.plotly_chart(fig_class, use_container_width=True)
             if 'Предмет' in class_df.columns:
