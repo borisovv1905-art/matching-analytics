@@ -6,6 +6,7 @@ from datetime import datetime
 import re
 import time
 import requests
+import gc
 
 # Настройка страницы
 st.set_page_config(
@@ -55,10 +56,45 @@ def load_xlsx_from_github(filename):
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         excel_file = BytesIO(response.content)
-        return pd.read_excel(excel_file, sheet_name=None, engine='openpyxl')
+        sheets = pd.read_excel(excel_file, sheet_name=None, engine='openpyxl')
+
+        # ⚠️ Служебные колонки-гиганты (схемы/промпты для LLM) — само приложение
+        # их нигде не использует, но они весят почти столько же, сколько текст
+        # диалога. Дропаем сразу при чтении, чтобы они вообще не попадали в кэш.
+        USELESS_HEAVY_COLS = [
+            'task_schema', 'topic_schema_main', 'topic_schema_boss',
+            'topic_schema_summary', 'topic_schema_plan'
+        ]
+        for sheet_name, df in sheets.items():
+            drop_cols = [c for c in USELESS_HEAVY_COLS if c in df.columns]
+            if drop_cols:
+                sheets[sheet_name] = df.drop(columns=drop_cols)
+
+        return sheets
     except Exception as e:
         st.error(f"💥 Ошибка загрузки {filename}: {e}")
         return {}
+
+def get_dialog_text(month_name, dialog_id):
+    """
+    Достаёт полный текст ОДНОГО диалога по требованию, а не для всех разом.
+    load_xlsx_from_github уже кэширован — файл с GitHub второй раз не скачивается,
+    просто ищем нужную строку в уже загруженных (кэшированных) листах.
+    """
+    month_config = MONTHS.get(month_name, {})
+    filenames = month_config.get('files', [])
+
+    for filename in filenames:
+        all_sheets = load_xlsx_from_github(filename)
+        for sheet_name, sheet_df in all_sheets.items():
+            if sheet_name in SKIP_SHEETS or sheet_df.empty:
+                continue
+            if 'dialog_id' not in sheet_df.columns or 'Диалог' not in sheet_df.columns:
+                continue
+            match = sheet_df[sheet_df['dialog_id'] == dialog_id]
+            if not match.empty:
+                return match.iloc[0]['Диалог']
+    return None
 
 @st.cache_data(ttl=3600)
 def load_month_data(month_name):
@@ -108,9 +144,30 @@ def load_month_data(month_name):
             )
 
         # 🦴 skeleton берём прямо из общего датафрейма (там уже есть колонка "Скелет")
+        # ⚠️ 'Диалог' (полный текст) сюда НЕ включаем — держать текст всех диалогов
+        # разом в памяти дорого. Полный текст подгружается по требованию через
+        # get_dialog_text() только для того диалога, который реально открыли.
         if not data['chart'].empty and 'Скелет' in data['chart'].columns:
-            skel_cols = [c for c in ['dialog_id', 'Диалог', 'Скелет', 'dialog_grade', 'dialog_role'] if c in data['chart'].columns]
+            skel_cols = [c for c in ['dialog_id', 'Скелет', 'dialog_grade', 'dialog_role'] if c in data['chart'].columns]
             data['skeleton'] = data['chart'][skel_cols].copy()
+
+            # ⚠️ ВАЖНО ДЛЯ ПАМЯТИ: 'Диалог' и 'Скелет' — самые тяжёлые текстовые поля
+            # (полный текст диалога на десятки тысяч строк). Они уже сохранены выше
+            # в data['skeleton'] — держать их ЕЩЁ РАЗ в data['chart'] означает
+            # удвоение памяти на ровном месте. Ни один другой график/вкладка их
+            # из chart не читает (только из data['skeleton']), поэтому дропаем.
+            #
+            # 🆕 Плюс отдельно нашлись служебные колонки-гиганты (task_schema,
+            # topic_schema_*) — это схемы/промпты для LLM, само приложение их
+            # НИГДЕ не использует, но они весят почти столько же, сколько 'Диалог'.
+            # Дропаем и их — на 25 тыс. строк это реально экономит сотни МБ.
+            heavy_cols = [c for c in [
+                'Диалог', 'Скелет',
+                'task_schema', 'topic_schema_main', 'topic_schema_boss',
+                'topic_schema_summary', 'topic_schema_plan'
+            ] if c in data['chart'].columns]
+            if heavy_cols:
+                data['chart'] = data['chart'].drop(columns=heavy_cols)
 
         progress_bar.progress(100)
     finally:
@@ -293,12 +350,21 @@ def main():
 
         with st.spinner('Загрузка данных...'):
             if selected_month == ALL_MONTHS_OPTION:
+                # ⚠️ Самый тяжёлый режим по памяти — здесь легко упереться в лимит
+                # Streamlit Cloud (обычно ~1GB), поэтому текстовые поля не дублируем:
+                # 'Диалог'/'Скелет' держим ТОЛЬКО в skeleton-датафрейме, а не ещё раз в chart.
+                HEAVY_TEXT_COLS = ['Диалог', 'Скелет']
+
                 chart_frames, skel_frames = [], []
                 for m in MONTH_ORDER:
                     d = load_month_data(m)
                     if not d['chart'].empty:
                         c = d['chart'].copy()
                         c['Месяц'] = m
+                        # тяжёлый текст убираем из "основного" датафрейма — он уже есть в skeleton
+                        drop_cols = [col for col in HEAVY_TEXT_COLS if col in c.columns]
+                        if drop_cols:
+                            c = c.drop(columns=drop_cols)
                         chart_frames.append(c)
                     sk = d.get('skeleton', pd.DataFrame())
                     if not sk.empty:
@@ -308,6 +374,15 @@ def main():
 
                 chart_all = pd.concat(chart_frames, ignore_index=True) if chart_frames else pd.DataFrame()
                 skel_all = pd.concat(skel_frames, ignore_index=True) if skel_frames else pd.DataFrame()
+
+                # освобождаем промежуточные списки сразу, не дожидаясь сборщика мусора
+                del chart_frames, skel_frames
+                gc.collect()
+
+                st.sidebar.caption(
+                    "⚠️ Режим «Все месяцы» загружает много данных сразу — "
+                    "может занять больше времени, чем один месяц."
+                )
 
                 class_all = pd.DataFrame()
                 if not chart_all.empty and 'Класс' in chart_all.columns and 'Предмет' in chart_all.columns:
@@ -736,7 +811,12 @@ def main():
                 if not result.empty:
                     row = result.iloc[0]
                     skeleton = row.get('Скелет', row.get('скелет', ''))
-                    dialog = row.get('Диалог', '')
+
+                    # 🆕 Полный текст диалога подгружаем ТОЛЬКО для этого одного диалога,
+                    # а не держим его в памяти для всех сразу
+                    lookup_month = row.get('Месяц', selected_month)
+                    with st.spinner('Загрузка текста диалога...'):
+                        dialog = get_dialog_text(lookup_month, row['dialog_id']) or ''
                     
                     result_viz = visualize_skeleton_enhanced(skeleton, dialog, row.get('dialog_id'))
                     if isinstance(result_viz, tuple):
