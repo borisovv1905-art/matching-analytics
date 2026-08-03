@@ -416,9 +416,10 @@ def main():
             products = ['Все'] + sorted(data['chart']['product_slug'].dropna().unique().tolist())
             selected_product = st.selectbox("📦 Продукт", products)
 
-        if st.checkbox("🔍 Показать продукты", value=False):
-            if 'product_slug' in data['chart'].columns:
-                st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
+        with st.expander("🔧 Отладка", expanded=False):
+            if st.checkbox("Показать продукты", value=False):
+                if 'product_slug' in data['chart'].columns:
+                    st.write("Доступные:", data['chart']['product_slug'].dropna().unique())
 
         selected_source = 'Все'
         if 'chart' in data and not data['chart'].empty and 'источник_лист' in data['chart'].columns:
@@ -928,6 +929,37 @@ def main():
                 st.plotly_chart(fig_subject, use_container_width=True)
         else:
             st.info("ℹ️ Данные по классам/предметам не загружены")
+
+        # === 🆕 Частотность запросов (initial_topic) ===
+        # Свободный текст темы, введённый учеником/пришедший из журнала — уникальных
+        # формулировок тысячи, поэтому показываем не список всех, а частотный топ.
+        # Уважает текущие фильтры (df уже отфильтрован выше по всем полям сайдбара).
+        if 'initial_topic' in df.columns and df['initial_topic'].notna().any():
+            st.divider()
+            st.write("### 📝 Частотность запросов (исходная тема)")
+            topic_counts = df['initial_topic'].dropna().value_counts()
+            topic_counts = topic_counts[topic_counts.index.astype(str).str.strip() != '']
+
+            if not topic_counts.empty:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.metric("Заполнено тем", f"{topic_counts.sum():,}", f"из {len(df):,} диалогов")
+                with col_b:
+                    st.metric("Уникальных формулировок", f"{len(topic_counts):,}")
+
+                top_n = st.slider("Сколько тем показать", 5, 50, 15, key='top_topics_n')
+                top_topics_df = topic_counts.head(top_n).reset_index()
+                top_topics_df.columns = ['Тема', 'Количество']
+
+                fig_topics = px.bar(
+                    top_topics_df.sort_values('Количество'),
+                    x='Количество', y='Тема', orientation='h',
+                    title=f"Топ-{top_n} самых частых тем", text_auto='.0f'
+                )
+                fig_topics.update_layout(height=max(300, top_n * 25), showlegend=False)
+                st.plotly_chart(fig_topics, use_container_width=True)
+            else:
+                st.info("ℹ️ В текущей выборке нет заполненных тем (все диалоги — с баннера)")
     
     with tab5:
         st.subheader("⏱️ Метрики времени сессий")
