@@ -36,6 +36,14 @@ MONTHS = {
 MONTH_ORDER = list(MONTHS.keys())
 ALL_MONTHS_OPTION = '🗓 Все месяцы'
 
+# Английские сокращения — так называются файлы topic_frequency_* (кириллица в
+# именах файлов ломается при архивации/распаковке, особенно на Windows)
+MONTH_ABBR = {
+    'Январь': 'jan', 'Февраль': 'feb', 'Март': 'mar', 'Апрель': 'apr',
+    'Май': 'may', 'Июнь': 'jun', 'Июль': 'jul', 'Август': 'aug',
+    'Сентябрь': 'sep', 'Октябрь': 'oct', 'Ноябрь': 'nov', 'Декабрь': 'dec',
+}
+
 # Служебные листы внутри xlsx, которые НЕ являются данными диалогов — их пропускаем
 SKIP_SHEETS = {'Итоги_авто', 'ОБЩАЯ_СТАТИСТИКА', 'Статистика', 'Скелет'}
 
@@ -89,6 +97,38 @@ def load_xlsx_from_github(filename):
     except Exception as e:
         st.error(f"💥 Ошибка загрузки {filename}: {e}")
         return {}
+
+@st.cache_data(ttl=3600)
+def load_topic_frequency(month_name):
+    """
+    Читает готовые (заранее посчитанные офлайн-пайплайном topic_frequency_pipeline.py)
+    частоты нормализованных/объединённых тем — если файлы есть в репозитории.
+    Ожидаемый путь: data/topic_freq/topic_frequency_{month}.csv (+ _kr_/_links_/_other_lang_)
+    Возвращает (df_main, df_kr, df_links, df_other_lang) — пустые DataFrame, если файла нет.
+    """
+    empty = pd.DataFrame(columns=['dialog_grade', 'canonical_topic', 'frequency'])
+
+    def _try_fetch(url):
+        try:
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                return None
+            from io import StringIO
+            return pd.read_csv(StringIO(resp.text), encoding='utf-8-sig')
+        except Exception:
+            return None
+
+    base = f"{GITHUB_RAW_BASE}/topic_freq"
+    month_abbr = MONTH_ABBR.get(month_name, month_name)
+    df_main = _try_fetch(f"{base}/topic_frequency_{month_abbr}.csv")
+    df_kr = _try_fetch(f"{base}/topic_frequency_kr_{month_abbr}.csv")
+    df_links = _try_fetch(f"{base}/topic_frequency_links_{month_abbr}.csv")
+    df_other_lang = _try_fetch(f"{base}/topic_frequency_other_lang_{month_abbr}.csv")
+
+    return (df_main if df_main is not None else empty,
+            df_kr if df_kr is not None else empty,
+            df_links if df_links is not None else empty,
+            df_other_lang if df_other_lang is not None else empty)
 
 def get_dialog_text(month_name, dialog_id):
     """
@@ -946,35 +986,129 @@ def main():
             st.info("ℹ️ Данные по классам/предметам не загружены")
 
         # === 🆕 Частотность запросов (initial_topic) ===
-        # Свободный текст темы, введённый учеником/пришедший из журнала — уникальных
-        # формулировок тысячи, поэтому показываем не список всех, а частотный топ.
-        # Уважает текущие фильтры (df уже отфильтрован выше по всем полям сайдбара).
+        # Предпочитаем ЧИСТЫЕ данные из офлайн-пайплайна (topic_frequency_pipeline.py —
+        # нормализация + объединение дублей через эмбеддинги), если они уже загружены
+        # в репозиторий (data/topic_freq/...). Если файла для месяца ещё нет —
+        # показываем сырую частотность как раньше (лучше это, чем ничего).
         if 'initial_topic' in df.columns and df['initial_topic'].notna().any():
             st.divider()
             st.write("### 📝 Частотность запросов (исходная тема)")
-            topic_counts = df['initial_topic'].dropna().value_counts()
-            topic_counts = topic_counts[topic_counts.index.astype(str).str.strip() != '']
 
-            if not topic_counts.empty:
+            # Собираем чистые данные пайплайна за нужный месяц (месяцы)
+            months_to_load = MONTH_ORDER if selected_month == ALL_MONTHS_OPTION else [selected_month]
+            clean_frames, kr_frames, links_frames, other_frames = [], [], [], []
+            for m in months_to_load:
+                cm, ckr, clinks, cother = load_topic_frequency(m)
+                if not cm.empty:
+                    clean_frames.append(cm)
+                if not ckr.empty:
+                    kr_frames.append(ckr)
+                if not clinks.empty:
+                    links_frames.append(clinks)
+                if not cother.empty:
+                    other_frames.append(cother)
+
+            clean_df = pd.concat(clean_frames, ignore_index=True) if clean_frames else pd.DataFrame()
+            kr_df = pd.concat(kr_frames, ignore_index=True) if kr_frames else pd.DataFrame()
+            links_df = pd.concat(links_frames, ignore_index=True) if links_frames else pd.DataFrame()
+            other_df = pd.concat(other_frames, ignore_index=True) if other_frames else pd.DataFrame()
+
+            if not clean_df.empty:
+                # ✅ Чистые данные есть — используем их
+                if selected_grade != 'Все' and 'dialog_grade' in clean_df.columns:
+                    clean_df = clean_df[clean_df['dialog_grade'].astype(str) == selected_grade]
+
+                clean_df = (
+                    clean_df.groupby('canonical_topic')['frequency']
+                    .sum()
+                    .reset_index()
+                    .sort_values('frequency', ascending=False)
+                )
+
+                st.success("✨ Показаны нормализованные темы (очищены и объединены дубли)")
+
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    st.metric("Заполнено тем", f"{topic_counts.sum():,}", f"из {len(df):,} диалогов")
+                    st.metric("Уникальных тем (после очистки)", f"{len(clean_df):,}")
                 with col_b:
-                    st.metric("Уникальных формулировок", f"{len(topic_counts):,}")
+                    st.metric("Суммарная частота", f"{clean_df['frequency'].sum():,}")
 
-                top_n = st.slider("Сколько тем показать", 5, 50, 15, key='top_topics_n')
-                top_topics_df = topic_counts.head(top_n).reset_index()
-                top_topics_df.columns = ['Тема', 'Количество']
+                top_n = st.slider("Сколько тем показать", 5, 50, 15, key='top_topics_n_clean')
+                top_topics_df = clean_df.head(top_n).rename(
+                    columns={'canonical_topic': 'Тема', 'frequency': 'Количество'}
+                )
 
                 fig_topics = px.bar(
                     top_topics_df.sort_values('Количество'),
                     x='Количество', y='Тема', orientation='h',
-                    title=f"Топ-{top_n} самых частых тем", text_auto='.0f'
+                    title=f"Топ-{top_n} самых частых тем (после нормализации)", text_auto='.0f'
                 )
                 fig_topics.update_layout(height=max(300, top_n * 25), showlegend=False)
                 st.plotly_chart(fig_topics, use_container_width=True)
+
+                if not kr_df.empty:
+                    with st.expander("📋 Контрольные работы — отдельная частотность"):
+                        if selected_grade != 'Все' and 'dialog_grade' in kr_df.columns:
+                            kr_df = kr_df[kr_df['dialog_grade'].astype(str) == selected_grade]
+                        kr_top = (
+                            kr_df.groupby('canonical_topic')['frequency'].sum()
+                            .reset_index().sort_values('frequency', ascending=False).head(15)
+                        )
+                        for _, row in kr_top.iterrows():
+                            st.caption(f"{row['frequency']} — {row['canonical_topic']}")
+
+                if not other_df.empty:
+                    with st.expander(f"🌐 Темы не на русском ({int(other_df['frequency'].sum()):,})"):
+                        st.caption("Заполнены на другом языке — модель эмбеддингов заточена под русский, поэтому семантическое объединение сюда не применялось.")
+                        od = other_df.copy()
+                        if selected_grade != 'Все' and 'dialog_grade' in od.columns:
+                            od = od[od['dialog_grade'].astype(str) == selected_grade]
+                        od_top = (
+                            od.groupby('canonical_topic')['frequency'].sum()
+                            .reset_index().sort_values('frequency', ascending=False).head(15)
+                        )
+                        for _, row in od_top.iterrows():
+                            st.caption(f"{row['frequency']} — {row['canonical_topic']}")
+
+                if not links_df.empty:
+                    with st.expander(f"🔗 Темы-ссылки, а не текст ({int(links_df['frequency'].sum()):,})"):
+                        st.caption("Кто-то вставил URL вместо описания темы урока.")
+                        ld = links_df.copy()
+                        if selected_grade != 'Все' and 'dialog_grade' in ld.columns:
+                            ld = ld[ld['dialog_grade'].astype(str) == selected_grade]
+                        ld_top = ld.sort_values('frequency', ascending=False).head(10)
+                        for _, row in ld_top.iterrows():
+                            st.caption(f"{row['frequency']} — {row['canonical_topic']}")
             else:
-                st.info("ℹ️ В текущей выборке нет заполненных тем (все диалоги — с баннера)")
+                # ⚠️ Пока нет — сырая частотность как временный вариант
+                st.caption(
+                    "⚠️ Нормализованные данные для этого месяца ещё не загружены "
+                    "(запусти `topic_frequency_pipeline.py` и залей результат в `data/topic_freq/`). "
+                    "Пока показана сырая частотность — без очистки дублей и служебного мусора."
+                )
+                topic_counts = df['initial_topic'].dropna().value_counts()
+                topic_counts = topic_counts[topic_counts.index.astype(str).str.strip() != '']
+
+                if not topic_counts.empty:
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.metric("Заполнено тем", f"{topic_counts.sum():,}", f"из {len(df):,} диалогов")
+                    with col_b:
+                        st.metric("Уникальных формулировок", f"{len(topic_counts):,}")
+
+                    top_n = st.slider("Сколько тем показать", 5, 50, 15, key='top_topics_n_raw')
+                    top_topics_df = topic_counts.head(top_n).reset_index()
+                    top_topics_df.columns = ['Тема', 'Количество']
+
+                    fig_topics = px.bar(
+                        top_topics_df.sort_values('Количество'),
+                        x='Количество', y='Тема', orientation='h',
+                        title=f"Топ-{top_n} самых частых тем (сырые, без очистки)", text_auto='.0f'
+                    )
+                    fig_topics.update_layout(height=max(300, top_n * 25), showlegend=False)
+                    st.plotly_chart(fig_topics, use_container_width=True)
+                else:
+                    st.info("ℹ️ В текущей выборке нет заполненных тем (все диалоги — с баннера)")
     
     with tab5:
         st.subheader("⏱️ Метрики времени сессий")
