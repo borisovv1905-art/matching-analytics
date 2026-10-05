@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+from difflib import SequenceMatcher
+import os
 import re
 import time
 import requests
@@ -29,6 +31,8 @@ MONTHS = {
     'Апрель': {'files': ['prod_apr2026.xlsx']},
     'Май': {'files': ['prod_may2026(mesh).xlsx', 'prod_may2026(standalone_eljur_search).xlsx']},
     'Июнь': {'files': ['prod_jun2026.xlsx']},
+    'Июль': {'files': ['prod_jul2026.xlsx']},
+    'Август': {'files': ['prod_aug2026.xlsx']},
 }
 
 # Хронологический порядок месяцев — единый источник правды для всей сортировки.
@@ -68,6 +72,167 @@ def extract_base_source(sheet_name):
         return parts[0]
     return sheet_name
 
+# С июля формат выгрузки поменялся (последние столбцы листа):
+#   янв–июнь: ... 'Тема', 'Метчинг', 'Постметчинг', 'skelet', 'skelet_clean', 'Скелет'
+#   июль+:    ... 'Тема', 'answer', 'Метчинг', 'answer', 'Постметчинг', 'Скелет'
+# - 'answer' — сырой JSON-ответ LLM ('```json {"tag": "(-) всё хорошо"} ```'), дубль
+#   соседней колонки; pandas переименовывает повторы в 'answer.1', 'answer.2'.
+# - На листе eljur_июль вместо заголовка 'Скелет' тоже стоит 'answer' (-> 'answer.2').
+# - Значения 'Метчинг'/'Постметчинг' идут БЕЗ префикса '(-) ' ('всё хорошо'),
+#   а весь код ниже сравнивает с '(-) всё хорошо' — приводим к старому виду.
+_ANSWER_COL_RE = re.compile(r'^answer(\.\d+)?$')
+STATUS_COLS = ['Метчинг', 'Постметчинг']
+STATUS_PREFIX = '(-) '
+
+def normalize_sheet(df):
+    """Приводит лист любого месяца к формату янв–июнь"""
+    cols = list(df.columns)
+
+    # Скелет без заголовка: берём колонку сразу после 'Постметчинг', если это 'answer*'
+    if 'Скелет' not in cols and 'Постметчинг' in cols:
+        idx = cols.index('Постметчинг')
+        if idx + 1 < len(cols) and _ANSWER_COL_RE.match(str(cols[idx + 1])):
+            df = df.rename(columns={cols[idx + 1]: 'Скелет'})
+            cols = list(df.columns)
+
+    drop_cols = [c for c in cols if _ANSWER_COL_RE.match(str(c)) or c in ('skelet', 'skelet_clean')]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+
+    for col in STATUS_COLS:
+        if col in df.columns:
+            s = df[col].where(df[col].isna(), df[col].astype(str).str.strip())
+            needs_prefix = s.notna() & (s != '') & ~s.astype(str).str.startswith('(-)')
+            df[col] = s.where(~needs_prefix, STATUS_PREFIX + s.astype(str))
+
+    return df
+
+# === ЗАПРОСЫ С БАННЕРА ===
+# У зашедших с баннера initial_topic пустой — тему ученик пишет сам в чате, в ответ
+# на «Какую тему будем изучать?». Достаём эти сообщения из текста диалога.
+_MSG_RE = re.compile(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (user|bot): ', re.M)
+_ASK_TOPIC_PREFIXES = ('какую тему', 'не могу найти эту тему', 'попробуй сказать по-другому',
+                       'что-то я отвлёкся', 'давай подготовимся к контрольной')
+_TOPIC_MENU_PREFIX = 'выбери одну из этих тем'
+_LESSON_START_PREFIXES = ('отлично! начинаем изучение', 'план наших действий', 'план действий', 'скажи «да»')
+_MENU_BUTTONS = {'изучить тему', 'меня не было на уроке, нужно наверстать',
+                 'скоро контрольная, надо подготовиться', 'хочу лучше разобраться в теме',
+                 'ввести другую тему'}
+BANNER_COL = 'banner_queries'
+BANNER_SEP = '\x1f'  # в самих сообщениях встречаются переносы строк, поэтому не '\n'
+
+def extract_banner_queries(dialog_text):
+    """
+    Что ученик сам написал, пока бот подбирал тему (до старта урока).
+    Нажатия кнопок меню и выбор темы из предложенного ботом списка не считаем.
+    """
+    if not isinstance(dialog_text, str):
+        return []
+    parts = _MSG_RE.split(dialog_text)  # ['', role, text, role, text, ...]
+    queries, offered, prev_bot = [], set(), None
+    for i in range(1, len(parts) - 1, 2):
+        role, text = parts[i], parts[i + 1].strip()
+        low = text.lower()
+        if role == 'bot':
+            if low.startswith(_LESSON_START_PREFIXES):
+                break
+            prev_bot = low
+            offered = ({m.lower().strip() for m in re.findall(r'\*\*(.+?)\*\*', text)}
+                       if low.startswith(_TOPIC_MENU_PREFIX) else set())
+            continue
+        if not text or low in _MENU_BUTTONS or low.startswith('объясни «'):
+            continue  # кнопки меню / кнопка «Объясни» на сообщении бота
+        if prev_bot is None or prev_bot.startswith(_ASK_TOPIC_PREFIXES + (_TOPIC_MENU_PREFIX,)):
+            choice = re.sub(r'\s*\(\d+\s*класс\)\s*$', '', low).strip()
+            if offered and (choice in offered or re.fullmatch(r'[1-5]\.?', choice)):
+                continue  # выбрал тему из списка, а не написал свою
+            queries.append(text)
+    return queries
+
+_TASK_VERB_RE = re.compile(r'(?<!\w)(найди|найдите|вычисли|вычислите|реши|решите|упрости|упростите|докажи|докажите|сколько|чему равн)')
+_FILLER_START_RE = re.compile(
+    r'^(?:изучить|изучаем|изучим|изучать|объясни(?:те)?|расскажи(?:те)?|покажи|помоги(?:те)?|'
+    r'хочу|мне|нужно|надо|давай|пожалуйста|пж|тема|тему|темы|про|по|о|об|на|с|разобраться|разобрать|'
+    r'понять|повторить|подготовиться|к|в|контрольной)(?!\w)[\s,:.\-]*'
+)
+
+def classify_banner_query(text):
+    """-> ('topic' | 'task' | 'junk', нормализованный текст)"""
+    t = re.sub(r'<br\s*/?>', ' ', str(text), flags=re.I)
+    t = re.sub(r'<[^>]+>', ' ', t).replace('&nbsp;', ' ').replace('\xa0', ' ')
+    t = re.sub(r'\s+', ' ', t).strip()
+    low = t.lower()
+    if ('$' in t or '\\frac' in t or re.search(r'\d\s*[-+*/:=^×÷]\s*\d', t)
+            or len(t) > 200 or (_TASK_VERB_RE.search(low) and len(t) > 40)):
+        return 'task', low[:150]
+    low = re.sub(r'(?<!\w)\d{1,2}\s*-?\s*(?:й|го|ой|ый)?\s*класс\w*', ' ', low)   # '7 класс', '5-го класса'
+    low = re.sub(r'(?<!\w)класс\w*\s*\d{1,2}(?!\d)', ' ', low)                    # 'класс 7'
+    low = re.sub(r'(?<!\w)(?:по|в|из) (?:математик|алгебр|геометри)\w*', ' ', low)
+    low = re.sub(r'(?<!\w)пожалуйста(?!\w)', ' ', low)
+    low = re.sub(r'\s+', ' ', low).strip(' .,;:!?-–—"«»()')
+    prev = None
+    while prev != low:
+        prev = low
+        low = _FILLER_START_RE.sub('', low).strip(' .,;:!?-–—"«»()')
+    if len(low) < 3 or not re.search(r'[а-яёa-z]', low):
+        return 'junk', str(text).strip()[:80]
+    return 'topic', low
+
+_STOP_WORDS = {'и', 'в', 'на', 'с', 'со', 'по', 'о', 'об', 'для', 'к', 'от', 'из', 'а'}
+
+def _topic_words(topic):
+    return sorted(w for w in re.findall(r'\w+', topic.replace('ё', 'е')) if w not in _STOP_WORDS)
+
+def _word_similar(w, x, threshold):
+    """Отличаются только окончанием ('дробь'/'дроби') или опечаткой ('ленейные'/'линейные')"""
+    prefix = len(os.path.commonprefix([w, x]))
+    if prefix >= max(4, max(len(w), len(x)) - 3):  # 'логин'/'логарифмы' — не склеиваем
+        return True
+    return SequenceMatcher(None, w, x).ratio() >= threshold
+
+def _same_words(a, b, threshold):
+    """Каждое слово a похоже на своё слово из b — порядок не важен"""
+    rest = list(b)
+    for w in a:
+        match = next((x for x in rest if _word_similar(w, x, threshold)), None)
+        if match is None:
+            return False
+        rest.remove(match)
+    return True
+
+@st.cache_data(ttl=3600)
+def merge_similar_topics(topic_counts, threshold=0.85):
+    """
+    {тема: частота} -> {каноническая тема: (частота, [варианты])}.
+    Склеивает только опечатки, окончания и перестановку слов: 'ленейные уравнения',
+    'уравнения линейные' -> 'линейные уравнения'. Разные по составу формулировки
+    ('деление дробей' / 'деление и умножение дробей') НЕ склеиваются.
+    Название — самый частый вариант.
+    """
+    texts = sorted(topic_counts, key=lambda t: (-topic_counts[t], len(t)))
+    # сравниваем только внутри корзины (кол-во слов, первые буквы слов) — иначе n² на тысячах тем
+    buckets = {}
+    for t in texts:
+        words = _topic_words(t)
+        buckets.setdefault((len(words), tuple(w[0] for w in words)), []).append((t, words))
+    canon_of = {}
+    for items in buckets.values():
+        heads = []  # (каноническая тема, её слова) — по убыванию частоты
+        for t, words in items:
+            for head, head_words in heads:
+                if _same_words(words, head_words, threshold):
+                    canon_of[t] = head
+                    break
+            else:
+                heads.append((t, words))
+                canon_of[t] = t
+    result = {}
+    for t in texts:  # texts отсортированы по частоте — канон всегда идёт первым
+        head = canon_of[t]
+        total, variants = result.get(head, (0, []))
+        result[head] = (total + topic_counts[t], variants + [t])
+    return result
+
 # === ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ===
 
 @st.cache_data(ttl=3600)
@@ -91,7 +256,10 @@ def load_xlsx_from_github(filename):
         for sheet_name, df in sheets.items():
             drop_cols = [c for c in USELESS_HEAVY_COLS if c in df.columns]
             if drop_cols:
-                sheets[sheet_name] = df.drop(columns=drop_cols)
+                df = df.drop(columns=drop_cols)
+            if 'dialog_id' in df.columns:
+                df = normalize_sheet(df)
+            sheets[sheet_name] = df
 
         return sheets
     except Exception as e:
@@ -184,6 +352,18 @@ def load_month_data(month_name):
         if dialog_frames:
             df = pd.concat(dialog_frames, ignore_index=True, sort=False)
             df = df.rename(columns=COLUMN_RENAME)
+
+            # 🆕 Запросы зашедших с баннера (initial_topic пустой) достаём из текста диалога
+            # СЕЙЧАС — ниже 'Диалог' из chart выкидывается ради памяти. Храним сырые
+            # сообщения ученика (короткие), нормализация — на лету во вкладке «Классы/Предметы».
+            if 'Диалог' in df.columns:
+                status_text.text(f"💬 {month_name}: достаём запросы с баннера...")
+                is_banner = (df['initial_topic'].isna() | (df['initial_topic'].astype(str).str.strip() == '')
+                             if 'initial_topic' in df.columns else pd.Series(True, index=df.index))
+                df[BANNER_COL] = None
+                df.loc[is_banner, BANNER_COL] = df.loc[is_banner, 'Диалог'].map(
+                    lambda d: BANNER_SEP.join(extract_banner_queries(d)) or None
+                )
             data['chart'] = df
 
         progress_bar.progress(85)
@@ -392,7 +572,7 @@ def load_multiple_months(month_list):
 
 def main():
     st.title("📊 R&D Аналитика: Мэтчинг")
-    st.markdown("Визуализация данных по диалогам за январь–июнь 2026")
+    st.markdown(f"Визуализация данных по диалогам за {MONTH_ORDER[0].lower()}–{MONTH_ORDER[-1].lower()} 2026")
     
     with st.sidebar:
         st.header("🎛 Фильтры")
@@ -810,7 +990,7 @@ def main():
             col1, col2, col3 = st.columns(3)
             with col1: st.metric("📥 Всего диалогов", f"{len(df):,}")
             with col2:
-                if 'status_only' in df.columns:
+                if 'status_only' in df.columns and len(df) > 0:
                     success = len(df[df['status_only'] == '(-) всё хорошо'])
                     st.metric("✅ Успешный мэтчинг", f"{success:,}", delta=f"{success/len(df)*100:.1f}%")
             with col3:
@@ -990,7 +1170,8 @@ def main():
         # нормализация + объединение дублей через эмбеддинги), если они уже загружены
         # в репозиторий (data/topic_freq/...). Если файла для месяца ещё нет —
         # показываем сырую частотность как раньше (лучше это, чем ничего).
-        if 'initial_topic' in df.columns and df['initial_topic'].notna().any():
+        if (entry_source_filter != '🖼 С баннера (темы нет)'
+                and 'initial_topic' in df.columns and df['initial_topic'].notna().any()):
             st.divider()
             st.write("### 📝 Частотность запросов (исходная тема)")
 
@@ -1109,7 +1290,76 @@ def main():
                     st.plotly_chart(fig_topics, use_container_width=True)
                 else:
                     st.info("ℹ️ В текущей выборке нет заполненных тем (все диалоги — с баннера)")
-    
+
+        # === 🆕 Частотность запросов зашедших С БАННЕРА ===
+        # Темы нет в initial_topic — берём то, что ученик сам написал боту в ответ на
+        # «Какую тему будем изучать?» (извлекается при загрузке в load_month_data),
+        # нормализуем и склеиваем опечатки. Учитываются ВСЕ фильтры сайдбара.
+        if entry_source_filter != '📓 Из журнала (тема есть)' and BANNER_COL in df.columns:
+            banner_df = df[df[BANNER_COL].notna()]
+            st.divider()
+            st.write("### 🖼 Частотность запросов — заход с баннера")
+            st.caption(
+                "Тема не приходит из журнала — ученик пишет её сам. Берём его сообщения боту "
+                "до начала урока (кнопки меню и выбор темы из предложенного списка не считаем), "
+                "нормализуем и склеиваем опечатки/окончания. Один запрос считается раз на диалог."
+            )
+            if banner_df.empty:
+                st.info("ℹ️ В текущей выборке нет диалогов с баннера, где ученик что-то написал")
+            else:
+                topic_counts, task_list, junk_list = {}, [], []
+                for raw in banner_df[BANNER_COL]:
+                    seen = set()
+                    for q in raw.split(BANNER_SEP):
+                        kind, text = classify_banner_query(q)
+                        if kind == 'topic' and text not in seen:
+                            seen.add(text)
+                            topic_counts[text] = topic_counts.get(text, 0) + 1
+                        elif kind == 'task':
+                            task_list.append(text)
+                        elif kind == 'junk':
+                            junk_list.append(text)
+
+                merged = merge_similar_topics(topic_counts)
+                banner_topics = pd.DataFrame(
+                    [(name, freq, len(variants), ', '.join(variants[1:6]))
+                     for name, (freq, variants) in merged.items()],
+                    columns=['Тема', 'Количество', 'Вариантов', 'Склеено из (пример)']
+                ).sort_values('Количество', ascending=False).reset_index(drop=True)
+
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("Диалогов с запросом", f"{len(banner_df):,}")
+                with col_b:
+                    st.metric("Уникальных тем (после очистки)", f"{len(banner_topics):,}",
+                              f"из {len(topic_counts):,} формулировок", delta_color='off')
+                with col_c:
+                    st.metric("Задач вместо темы", f"{len(task_list):,}")
+
+                if not banner_topics.empty:
+                    top_n_b = st.slider("Сколько тем показать", 5, 50, 15, key='top_topics_n_banner')
+                    fig_banner = px.bar(
+                        banner_topics.head(top_n_b).sort_values('Количество'),
+                        x='Количество', y='Тема', orientation='h',
+                        title=f"Топ-{top_n_b} запросов с баннера (после нормализации)", text_auto='.0f'
+                    )
+                    fig_banner.update_layout(height=max(300, top_n_b * 25), showlegend=False)
+                    st.plotly_chart(fig_banner, use_container_width=True)
+
+                    with st.expander(f"📋 Все темы с баннера ({len(banner_topics):,})"):
+                        st.dataframe(banner_topics, use_container_width=True, hide_index=True)
+
+                if task_list:
+                    with st.expander(f"🧮 Ввели задачу/пример вместо темы ({len(task_list):,})"):
+                        for t in pd.Series(task_list).value_counts().head(20).index:
+                            st.caption(t)
+                if junk_list:
+                    with st.expander(f"🗑 Не распознано как тема ({len(junk_list):,})"):
+                        st.caption("Цифры, «7 класс», «да», одно-два символа и т.п.")
+                        jc = pd.Series(junk_list).str.lower().value_counts().head(20)
+                        for t, n in jc.items():
+                            st.caption(f"{n} — {t}")
+
     with tab5:
         st.subheader("⏱️ Метрики времени сессий")
         time_cols = [c for c in df.columns if 'Время' in c or 'Сообщений' in c]
@@ -1381,7 +1631,10 @@ def main():
     st.divider()
     col1, col2 = st.columns([3, 1])
     with col2:
-        st.download_button("📥 Скачать отчёт (CSV)", data=df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'),
+        export_df = df.copy()
+        if BANNER_COL in export_df.columns:
+            export_df[BANNER_COL] = export_df[BANNER_COL].str.replace(BANNER_SEP, ' | ', regex=False)
+        st.download_button("📥 Скачать отчёт (CSV)", data=export_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'),
                           file_name=f"analytics_{selected_month}_{datetime.now().strftime('%Y%m%d')}.csv",
                           mime="text/csv", use_container_width=True)
 
